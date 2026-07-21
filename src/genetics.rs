@@ -29,6 +29,7 @@ use crate::{
     asphalt::AsphaltConfig,
     bark::BarkConfig,
     brick::BrickConfig,
+    cactus::CactusSkinConfig,
     chain_link::ChainLinkConfig,
     cobblestone::CobblestoneConfig,
     concrete::ConcreteConfig,
@@ -37,6 +38,8 @@ use crate::{
     fabric::FabricConfig,
     flame::FlameConfig,
     flower::FlowerConfig,
+    frond::FrondConfig,
+    grass::GrassTuftConfig,
     ground::GroundConfig,
     ice::IceConfig,
     iron_grille::IronGrilleConfig,
@@ -320,6 +323,57 @@ impl_genotype!(LeafConfig {
     midrib_width: f64(0.02, 0.03, 0.35),
     vein_count: f64(1.0, 2.0, 14.0),
     venule_strength: f64(0.1, 0.0, 1.0),
+});
+
+impl_genotype!(CactusSkinConfig {
+    seed: seed,
+    rib_count: usize(3, 40),
+    areole_rows: usize(2, 40),
+    rib_depth: f64(0.1, 0.0, 1.0),
+    rib_sharpness: f64(0.3, 0.3, 3.0),
+    color_skin: color3(0.06),
+    color_valley: color3(0.05),
+    color_areole: color3(0.05),
+    color_spine: color3(0.05),
+    areole_size: f64(0.005, 0.005, 0.08),
+    spine_reach: f64(0.5, 1.0, 6.0),
+    spine_count: usize(0, 24),
+    waxiness: f64(0.1, 0.0, 1.0),
+    normal_strength: f32(0.3, 0.5, 6.0),
+});
+
+impl_genotype!(FrondConfig {
+    seed: seed,
+    variant_rows: usize(1, 16),
+    variant_cols: usize(1, 16),
+    color_base: color3(0.05),
+    color_edge: color3(0.07),
+    width: f64(0.02, 0.04, 0.30),
+    tip_taper: f64(0.3, 0.4, 3.0),
+    midrib_width: f64(0.05, 0.05, 0.5),
+    vein_count: f64(1.0, 0.0, 20.0),
+    lobe_count: f64(1.0, 0.0, 12.0),
+    lobe_depth: f64(0.1, 0.0, 0.6),
+    normal_strength: f32(0.3, 0.5, 6.0),
+});
+
+impl_genotype!(GrassTuftConfig {
+    seed: seed,
+    variant_rows: usize(1, 16),
+    variant_cols: usize(1, 16),
+    blade_count: usize(1, 24),
+    color_base: color3(0.05),
+    color_tip: color3(0.07),
+    color_dry: color3(0.07),
+    blade_width: f64(0.01, 0.01, 0.12),
+    blade_taper: f64(0.3, 0.5, 4.0),
+    height_min: f64(0.1, 0.2, 1.0),
+    height_max: f64(0.1, 0.2, 1.0),
+    fan_spread: f64(0.05, 0.0, 0.5),
+    curve: f64(0.05, 0.0, 0.5),
+    base_spread: f64(0.04, 0.0, 0.4),
+    dry_fraction: f64(0.1, 0.0, 1.0),
+    normal_strength: f32(0.3, 0.5, 6.0),
 });
 
 impl_genotype!(TwigConfig {

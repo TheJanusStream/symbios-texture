@@ -22,6 +22,7 @@ pub mod ashlar;
 pub mod asphalt;
 pub mod bark;
 pub mod brick;
+pub mod cactus;
 pub mod chain_link;
 pub mod cobblestone;
 pub mod concrete;
@@ -31,8 +32,10 @@ pub mod fabric;
 pub mod fingerprint;
 pub mod flame;
 pub mod flower;
+pub mod frond;
 pub mod generator;
 pub mod genetics;
+pub mod grass;
 pub mod ground;
 pub mod ice;
 pub mod iron_grille;
@@ -67,9 +70,12 @@ pub mod twig;
 pub mod wainscoting;
 pub mod window;
 
+pub use cactus::{CactusSkinConfig, CactusSkinGenerator};
+pub use frond::{FrondConfig, FrondGenerator};
 pub use generator::{
     MAX_DIMENSION, TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions,
 };
+pub use grass::{GrassTuftConfig, GrassTuftGenerator};
 pub use leaf::{LeafConfig, LeafGenerator, LeafSample, LeafSampler, sample_leaf};
 pub use noise::ToroidalNoise;
 pub use sprite::{CellRng, SpriteCell, SpriteSample, generate_atlas};

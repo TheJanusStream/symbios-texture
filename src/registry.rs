@@ -79,6 +79,9 @@ macro_rules! for_each_generator {
             (LeafSprite, leaf_sprite, $crate::leaf_sprite::LeafSpriteConfig, $crate::leaf_sprite::LeafSpriteGenerator, Card),
             (Flame, flame, $crate::flame::FlameConfig, $crate::flame::FlameGenerator, Card),
             (Flower, flower, $crate::flower::FlowerConfig, $crate::flower::FlowerGenerator, Card),
+            (GrassTuft, grass, $crate::grass::GrassTuftConfig, $crate::grass::GrassTuftGenerator, Card),
+            (Frond, frond, $crate::frond::FrondConfig, $crate::frond::FrondGenerator, Card),
+            (CactusSkin, cactus, $crate::cactus::CactusSkinConfig, $crate::cactus::CactusSkinGenerator, Surface),
         }
     };
 }
