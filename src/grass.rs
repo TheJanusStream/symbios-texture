@@ -9,9 +9,9 @@
 //!
 //! # Coordinate conventions
 //! Local cell UV: blades root at the bottom edge (`v = 1`) and grow upward
-//! toward the tips (`v = 0`) — the same base-down convention as the leaf and
-//! petal cards, so an upright billboard quad meets the ground at its blade
-//! roots.
+//! toward the tips (`v = 0`), so an upright billboard quad meets the ground
+//! at its blade roots.  Note this is the *opposite* base-`v` to the leaf,
+//! broadleaf, and frond cards, which put the attachment at `v = 0`.
 //!
 //! Upload with `map_to_images_card`; see [`crate::sprite`] for the shared
 //! atlas conventions.

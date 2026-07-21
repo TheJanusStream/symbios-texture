@@ -23,7 +23,7 @@ pub struct IceConfig {
     /// PRNG seed for the deterministic noise pattern; different seeds give
     /// statistically-different textures from otherwise-identical configs.
     pub seed: u32,
-    /// Overall pattern scale `[1, 8]`.
+    /// Overall pattern scale `[0.5, 10]`.
     pub scale: f64,
     /// Crack-vein frequency `[1, 8]` — period of the sinusoidal bands over
     /// the noise contours; higher = more cracks.

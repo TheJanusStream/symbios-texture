@@ -5,8 +5,8 @@
 //! [`TextureGenerator`] trait, the raw [`TextureMap`] pixel/mip pipeline, the
 //! [`ToroidalNoise`] seamless-tiling wrapper, the shared
 //! [`sprite`]/[`surface`] sampling kits, the per-config
-//! [`symbios_genetics::Genotype`] implementations, and the canonical
-//! generator [`registry`].
+//! [`symbios_genetics::Genotype`] implementations, the [`fingerprint`]
+//! structural config hashing, and the canonical generator [`registry`].
 //!
 //! It depends only on bevy-free crates (`noise`, `rand`, `rayon`, `serde`,
 //! `symbios-genetics`).  The Bevy-coupled plugin, async generation pool, asset
@@ -17,6 +17,12 @@
 //! [`TextureGenerator`]: generator::TextureGenerator
 //! [`TextureMap`]: generator::TextureMap
 //! [`ToroidalNoise`]: noise::ToroidalNoise
+
+// Compile the README's code blocks as doctests so the examples shown on
+// GitHub / crates.io can never drift out of sync with the API.
+#[doc = include_str!("../README.md")]
+#[cfg(doctest)]
+pub struct ReadmeDoctests;
 
 pub mod ashlar;
 pub mod asphalt;

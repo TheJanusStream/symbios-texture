@@ -7,7 +7,8 @@
 //! 3. Subdivide the glass region into `panes_x × panes_y` panes separated by
 //!    mullions using fractional UV within the inner glass area.
 //! 4. Add FBM grime noise to the glass surface and roughness map.
-//! 5. Produce an alpha-masked card (clamp-to-edge sampler via `map_to_images_card`).
+//! 5. Produce a card whose alpha carries the glass translucency
+//!    (clamp-to-edge sampler via `map_to_images_card`).
 
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
@@ -60,14 +61,15 @@ impl Default for WindowConfig {
     }
 }
 
-/// Procedural window / glazing texture generator (foliage-card type).
+/// Procedural window / glazing texture generator (alpha-card type).
 ///
 /// Drives [`TextureGenerator::generate`] using a [`WindowConfig`].  Construct
 /// via [`WindowGenerator::new`] and call `generate` directly, or spawn a
 /// `PendingTexture::window` task for non-blocking generation.
 ///
-/// The result has per-pixel alpha: transparent outside the frame, semi-transparent
-/// glass, and opaque frame/mullions.
+/// The result has per-pixel alpha: opaque frame and mullions,
+/// semi-transparent glass (`glass_opacity`).  The frame band extends to the
+/// card edge, so no pixel is fully transparent.
 ///
 /// Noise objects are built in the constructor so that calling `generate`
 /// multiple times (e.g. producing size variants of the same material)

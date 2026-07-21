@@ -2,8 +2,8 @@
 //!
 //! The algorithm:
 //! 1. Precompute a toroidal grain FBM grid and a warp FBM grid over the whole
-//!    surface.  Both use `sample_grid` so torus coordinates are computed once
-//!    per row/column rather than once per pixel.
+//!    surface.  Both use `sample_grid_into` so torus coordinates are computed
+//!    once per row/column rather than once per pixel.
 //! 2. For each pixel, apply domain warp to the grain UV and bilinearly sample
 //!    the grain grid on the torus.
 //! 3. Determine which panel cell the pixel falls in, then classify it as frame

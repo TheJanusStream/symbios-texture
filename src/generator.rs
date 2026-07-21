@@ -134,16 +134,17 @@ impl TextureMap {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
 /// use symbios_texture::generator::{Workspace, TextureGenerator};
 /// use symbios_texture::thatch::{ThatchConfig, ThatchGenerator};
 ///
-/// let gen = ThatchGenerator::new(ThatchConfig::default());
+/// let generator = ThatchGenerator::new(ThatchConfig::default());
 /// let mut ws = Workspace::new();
 ///
 /// // First call allocates; subsequent calls reuse the same buffers.
-/// let map1 = gen.generate_with_workspace(2048, 2048, &mut ws).unwrap();
-/// let map2 = gen.generate_with_workspace(2048, 2048, &mut ws).unwrap();
+/// let map1 = generator.generate_with_workspace(256, 256, &mut ws).unwrap();
+/// let map2 = generator.generate_with_workspace(256, 256, &mut ws).unwrap();
+/// assert_eq!(map1.albedo, map2.albedo);
 /// ```
 pub struct Workspace {
     /// Pool of reusable `f64` grid buffers (noise samples, height maps, etc.).

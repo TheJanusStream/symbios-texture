@@ -24,8 +24,8 @@ pub struct FabricConfig {
     /// PRNG seed for the deterministic noise pattern; different seeds give
     /// statistically-different textures from otherwise-identical configs.
     pub seed: u32,
-    /// Threads per tile edge `[8, 64]` — rounded to an integer so the weave
-    /// tiles exactly.
+    /// Threads per tile edge, clamped to `[2, 128]` and rounded to an
+    /// integer so the weave tiles exactly.
     pub thread_count: f64,
     /// Thread width as a fraction of the lattice cell `[0.3, 0.98]`; lower
     /// values open visible gaps between threads (burlap), higher values

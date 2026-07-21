@@ -23,7 +23,7 @@ use crate::{
 pub struct ChainLinkConfig {
     /// PRNG seed for the rust pattern.
     pub seed: u32,
-    /// Diamond cells across the card `[4, 16]`.
+    /// Diamond cells across the card, rounded and clamped to `[2, 32]`.
     pub cell_count: f64,
     /// Wire radius in lattice units `[0.02, 0.2]` — fraction of a diamond
     /// half-diagonal.

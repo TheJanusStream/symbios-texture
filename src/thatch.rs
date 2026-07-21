@@ -10,7 +10,9 @@
 //!    of each period is darkened by `layer_shadow` to simulate the shadow cast
 //!    by the bundle tip above.
 //! 4. Lerp between `color_shadow` and `color_straw` using the combined signal.
-//! 5. Height = fiber_t × (1 – shadow gradient) for a convincing normal map.
+//! 5. Height = fibre value scaled by the position within its layer (bundles
+//!    stand proud near the tip), minus the layer-shadow band, for a
+//!    convincing normal map.
 
 use noise::{Fbm, MultiFractal, Perlin};
 

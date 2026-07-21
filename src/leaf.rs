@@ -87,7 +87,8 @@ pub struct LeafConfig {
     /// `0.05` = crisp narrow ridge; `0.20` = broad pronounced ridge.
     pub midrib_width: f64,
     /// Number of secondary vein pairs branching from the midrib.
-    /// Each pair spans one full sine cycle — `6` gives six chevron pairs.
+    /// Each pair spans one half-cycle of the rectified sine pattern —
+    /// `6` gives six chevron pairs.
     pub vein_count: f64,
     /// Blend weight of the venule (tertiary vein) network layer \[0, 1\].
     pub venule_strength: f64,

@@ -85,8 +85,10 @@ impl Default for FrondConfig {
     }
 }
 
-/// Peak of `sin(πv)·exp(-v)` over `v ∈ [0, 1]` — the un-normalised envelope
-/// maximum, divided out so `width` is the true maximum half-width.
+/// Value of the un-normalised envelope `sin(πv)·exp(-v)` at `v = 0.5`
+/// (`= exp(-1/2)`), divided out so `width` sets the envelope's half-width
+/// scale.  The true maximum (≈ 0.638 at `v ≈ 0.40`) is slightly higher, so
+/// the envelope can exceed `width` by a few percent near its peak.
 const ENVELOPE_PEAK: f64 = 0.606_530_66;
 
 /// One baked pinna variant.

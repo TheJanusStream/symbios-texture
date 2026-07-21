@@ -31,8 +31,8 @@ pub struct CactusSkinConfig {
     /// Rib relief `[0, 1]` — how deep the accordion pleats read in the
     /// height/normal map.
     pub rib_depth: f64,
-    /// Rib crest sharpness `[0.3, 3]`.  Higher → flatter ridges with sharper,
-    /// narrower valleys.
+    /// Rib crest sharpness `[0.3, 3]`.  Higher → sharper, narrower ridge
+    /// crests with broader valley floors.
     pub rib_sharpness: f64,
     /// Skin colour on the rib ridges in linear RGB \[0, 1\].
     pub color_skin: [f32; 3],

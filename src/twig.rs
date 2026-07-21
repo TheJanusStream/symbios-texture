@@ -83,7 +83,8 @@ pub struct TwigConfig {
     /// Scale of each lateral leaf card in UV space.
     pub leaf_scale: f64,
     /// Amplitude of the organic stem curvature in UV space.
-    /// `0.0` = perfectly straight; `0.05` is a natural-looking default.
+    /// `0.0` = perfectly straight; the default `0.015` gives a gentle
+    /// natural bow.
     pub stem_curve: f64,
     /// `false` → monopodial (opposite pairs, continuous axis);
     /// `true` → sympodial (alternate leaves, zigzag axis).

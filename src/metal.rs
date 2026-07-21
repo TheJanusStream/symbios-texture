@@ -1,13 +1,19 @@
-//! Metal texture generator — brushed finish or standing-seam roof panels,
-//! with optional rust weathering.
+//! Metal texture generator — brushed, standing-seam, hammered, or
+//! diamond-plate sheet, with optional rust weathering.
 //!
-//! The algorithm:
+//! The algorithm, per [`MetalStyle`]:
 //! 1. **Brushed**: anisotropic FBM — high frequency in U (many scratches),
 //!    very low frequency in V (scratches run nearly horizontally).
 //! 2. **StandingSeam**: sinusoidal ridge profile across V, with micro-detail
 //!    FBM overlay.
-//! 3. A separate low-frequency FBM drives rust-patch blending: rust areas
-//!    receive a warm colour, raised roughness, and reduced metallic value.
+//! 3. **Hammered**: overlapping round dimple depressions on a jittered grid
+//!    (peened sheet).
+//! 4. **DiamondPlate**: a diamond lattice of raised oblong studs with
+//!    alternating orientation (tread plate).
+//!
+//! In every style a separate low-frequency FBM drives rust-patch blending:
+//! rust areas receive a warm colour, raised roughness, and reduced metallic
+//! value.
 
 use std::f64::consts::TAU;
 

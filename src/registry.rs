@@ -26,9 +26,10 @@
 //! 1. Write the module: config struct (serde + `Default`) and a
 //!    `TextureGenerator` impl, with tests.
 //! 2. Add one row to the table below (pick `Surface` or `Card`).
-//! 3. Add the per-field tables: `impl_genotype!` in `genetics.rs` and
-//!    `impl_config_editor!` in `ui.rs` (behind the `egui` feature).
-//! 4. Document the config in the README.
+//! 3. Add the per-field tables: `impl_genotype!` in `genetics.rs` (this
+//!    crate) and `impl_config_editor!` in the `bevy_symbios_texture`
+//!    wrapper crate's `ui.rs` (behind its `egui` feature).
+//! 4. Add the generator to the roster in `README.md`.
 //!
 //! Everything else — async constructor, enum variant, label, render
 //! properties, dispatch, and fingerprint — derives from the row.
