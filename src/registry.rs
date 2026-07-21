@@ -82,6 +82,11 @@ macro_rules! for_each_generator {
             (GrassTuft, grass, $crate::grass::GrassTuftConfig, $crate::grass::GrassTuftGenerator, Card),
             (Frond, frond, $crate::frond::FrondConfig, $crate::frond::FrondGenerator, Card),
             (CactusSkin, cactus, $crate::cactus::CactusSkinConfig, $crate::cactus::CactusSkinGenerator, Surface),
+            (Moss, moss, $crate::moss::MossConfig, $crate::moss::MossGenerator, Surface),
+            (Lichen, lichen, $crate::lichen::LichenConfig, $crate::lichen::LichenGenerator, Surface),
+            (Reed, reed, $crate::reed::ReedConfig, $crate::reed::ReedGenerator, Card),
+            (Needle, needle, $crate::needle::NeedleConfig, $crate::needle::NeedleGenerator, Card),
+            (Broadleaf, broadleaf, $crate::broadleaf::BroadleafConfig, $crate::broadleaf::BroadleafGenerator, Card),
         }
     };
 }
