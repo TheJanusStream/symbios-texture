@@ -15,6 +15,21 @@
 //!
 //! Seam-freedom is guaranteed because cos(0)=cos(2π) and sin(0)=sin(2π), so
 //! u=0 and u=1 always resolve to the identical 4D coordinate.
+//!
+//! # Cellular noise
+//!
+//! Alongside the lattice-noise wrapper, this module provides the seamless
+//! cellular (Worley / Voronoi) family that the cell-decomposition generators
+//! are built from.  All three samplers share one [`CellularParams`] layout and
+//! tile by the same trick — cell indices wrap modulo the lattice period, and
+//! offsets take the shorter way round the torus:
+//!
+//! - [`cellular`] — the two nearest site distances plus the owning cell, for
+//!   domed stones, per-cell variation, and `F2 − F1` crack masks.
+//! - [`cellular_edge`] — true distance to the cell wall, for cracks of
+//!   *constant* width regardless of cell size.
+//! - [`cellular_smooth`] — a softmin `F1` without the faceted creases of plain
+//!   Worley, for organic plating.
 
 use noise::NoiseFn;
 use rayon::prelude::*;
@@ -175,6 +190,388 @@ pub fn bilinear_sample_torus(grid: &[f64], w: usize, h: usize, u: f64, v: f64) -
     v00 * (1.0 - fx) * (1.0 - fy) + v10 * fx * (1.0 - fy) + v01 * (1.0 - fx) * fy + v11 * fx * fy
 }
 
+/// Distance metric used to measure the offset from a query point to a
+/// cellular-noise site.
+///
+/// The metric decides the *shape* of a cell far more than its size: Euclidean
+/// gives the familiar rounded stone, Manhattan gives diamonds with axis-aligned
+/// facets, and Chebyshev gives squared-off blocks that read as tiling or
+/// masonry even before any pattern work is layered on top.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CellMetric {
+    /// Straight-line distance — rounded, organic cells (pebbles, plates).
+    #[default]
+    Euclidean,
+    /// Sum of per-axis offsets — diamond cells with 45° facets.
+    Manhattan,
+    /// Largest per-axis offset — square, axis-aligned cells.
+    Chebyshev,
+}
+
+impl CellMetric {
+    /// Combine two non-negative per-axis offsets into a single distance.
+    #[inline]
+    pub fn distance(self, dx: f64, dy: f64) -> f64 {
+        match self {
+            Self::Euclidean => (dx * dx + dy * dy).sqrt(),
+            Self::Manhattan => dx + dy,
+            Self::Chebyshev => dx.max(dy),
+        }
+    }
+}
+
+/// Site jitter used by the pre-existing cell-decomposition generators, and the
+/// default for [`CellularParams`].
+///
+/// A site is placed within `±0.35` of its cell centre, i.e. across the middle
+/// 70% of the cell.  Holding sites back from the cell corners keeps any two
+/// neighbours from landing almost on top of each other, which is what produces
+/// degenerate sliver cells.
+pub const DEFAULT_JITTER: f64 = 0.70;
+
+/// Upper bound on the cellular lattice resolution, matching the crate's
+/// `MAX_DIMENSION`: beyond one cell per texel the pattern is pure aliasing.
+const MAX_CELLS: f64 = 4096.0;
+
+/// The 5×5 block of candidate cells searched around every query point.
+///
+/// Five cells across is enough that a site jittered to the far corner of its
+/// cell is still found before a nearer one is missed, for any jitter in
+/// `[0, 1]`.
+const NEIGHBOURHOOD: usize = 25;
+
+/// Two site vectors closer together than this are treated as the same site.
+///
+/// Needed because a small lattice (`cells` < 5) wraps the same cell into the
+/// 5×5 neighbourhood more than once, and a duplicate of the owning site would
+/// otherwise report a zero-width border everywhere.
+const SITE_EPSILON: f64 = 1e-12;
+
+/// Smallest usable softmin falloff; guards against a divide-by-zero when a
+/// caller passes 0.
+const MIN_FALLOFF: f64 = 1e-6;
+
+/// Layout of a cellular (Worley / Voronoi) lattice in UV space.
+///
+/// Shared by [`cellular`], [`cellular_edge`], and [`cellular_smooth`] so a
+/// generator can build the layout once and query it several ways per pixel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CellularParams {
+    /// Cells across the tile.  Rounded to an integer so the lattice divides
+    /// the tile evenly and therefore wraps without a seam.
+    pub scale: f64,
+    /// PRNG seed for site placement.
+    pub seed: u32,
+    /// How site distance is measured.
+    pub metric: CellMetric,
+    /// How far a site may stray from its cell centre, in `[0, 1]`: `0.0` pins
+    /// every site dead centre (a perfectly regular lattice), `1.0` lets it
+    /// reach the cell edge.  Values near `1.0` produce sliver cells where two
+    /// neighbours crowd a shared corner; see [`DEFAULT_JITTER`].
+    pub jitter: f64,
+}
+
+impl CellularParams {
+    /// A lattice of `scale × scale` cells with Euclidean distance and
+    /// [`DEFAULT_JITTER`].
+    pub fn new(scale: f64, seed: u32) -> Self {
+        Self {
+            scale,
+            seed,
+            metric: CellMetric::default(),
+            jitter: DEFAULT_JITTER,
+        }
+    }
+
+    /// Measure site distance with `metric` instead of Euclidean.
+    #[must_use]
+    pub fn with_metric(mut self, metric: CellMetric) -> Self {
+        self.metric = metric;
+        self
+    }
+
+    /// Set how far sites may stray from their cell centres — see
+    /// [`jitter`](Self::jitter).
+    #[must_use]
+    pub fn with_jitter(mut self, jitter: f64) -> Self {
+        self.jitter = jitter;
+        self
+    }
+
+    /// Integer cell count across the tile, clamped to a sane range.
+    #[inline]
+    fn cells(&self) -> i64 {
+        self.scale.round().clamp(1.0, MAX_CELLS) as i64
+    }
+
+    /// Site-placement window within a cell as `(low edge, span)`, both in
+    /// cell-relative units.
+    #[inline]
+    fn jitter_bounds(&self) -> (f64, f64) {
+        let j = self.jitter.clamp(0.0, 1.0);
+        (0.5 - 0.5 * j, j)
+    }
+}
+
+/// The two nearest sites to a query point, as returned by [`cellular`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CellularSample {
+    /// Distance to the nearest site, in UV units.
+    pub f1: f64,
+    /// Distance to the second-nearest site, in UV units.
+    pub f2: f64,
+    /// Integer x coordinate of the nearest site's cell, in `[0, cells)`.
+    pub cell_x: i64,
+    /// Integer y coordinate of the nearest site's cell, in `[0, cells)`.
+    pub cell_y: i64,
+}
+
+impl CellularSample {
+    /// `F2 − F1`, the classic "crackle" mask: zero exactly on a cell boundary
+    /// and largest at cell centres.
+    ///
+    /// Cheap, but the band it draws is *wider where cells are larger*.  Use
+    /// [`cellular_edge`] instead when a crack needs a constant width.
+    #[inline]
+    pub fn ridge(&self) -> f64 {
+        self.f2 - self.f1
+    }
+}
+
+/// One candidate site as seen from a query point.
+#[derive(Clone, Copy, Debug, Default)]
+struct Site {
+    /// Per-axis offset magnitudes (always ≥ 0), for distance metrics.
+    adx: f64,
+    ady: f64,
+    /// Signed offset from the query point toward the site, for the border
+    /// geometry in [`cellular_edge`].
+    sdx: f64,
+    sdy: f64,
+    /// Wrapped integer cell coordinates.
+    ci: i64,
+    cj: i64,
+}
+
+/// Minimum-image offset between query coordinate `p` and site coordinate `c`
+/// on one wrapped axis, as `(magnitude, signed)`.
+///
+/// The magnitude is computed exactly as the original Voronoi loop did — take
+/// `|p − c|`, then fold it through `1 − d` once it exceeds half a tile — so
+/// that [`toroidal_voronoi`] keeps producing bit-for-bit identical results.
+/// The signed component points from the query point toward the nearest image
+/// of the site.
+#[inline]
+fn wrap_delta(p: f64, c: f64) -> (f64, f64) {
+    let raw = p - c;
+    let mut m = raw.abs();
+    // `raw > 0` means the site sits at the lower coordinate, so the vector
+    // pointing at it is negative.
+    let mut s = if raw > 0.0 { -1.0 } else { 1.0 };
+    if m > 0.5 {
+        m = 1.0 - m;
+        s = -s;
+    }
+    (m, s * m)
+}
+
+/// Resolved cellular lattice: everything [`visit_sites`] needs to place sites.
+///
+/// `pos_scale` is the divisor mapping cell indices back into UV space and
+/// `jitter_lo`/`jitter_span` are the site-placement window in cell-relative
+/// units.  They are stored rather than derived from a [`CellularParams`] so
+/// [`toroidal_voronoi`] can supply the literal values its historical output
+/// depends on.
+#[derive(Clone, Copy, Debug)]
+struct Lattice {
+    cells: i64,
+    pos_scale: f64,
+    jitter_lo: f64,
+    jitter_span: f64,
+    seed: u32,
+}
+
+impl Lattice {
+    /// The lattice described by `params`, with cell positions derived from the
+    /// rounded integer cell count.
+    fn new(params: &CellularParams) -> Self {
+        let cells = params.cells();
+        let (jitter_lo, jitter_span) = params.jitter_bounds();
+        Self {
+            cells,
+            pos_scale: cells as f64,
+            jitter_lo,
+            jitter_span,
+            seed: params.seed,
+        }
+    }
+}
+
+/// Visit every candidate site in the 5×5 neighbourhood around `(u, v)`.
+#[inline]
+fn visit_sites(u: f64, v: f64, lat: &Lattice, mut visit: impl FnMut(Site)) {
+    let gi = (u * lat.pos_scale).floor() as i64;
+    let gj = (v * lat.pos_scale).floor() as i64;
+
+    for di in -2i64..=2 {
+        for dj in -2i64..=2 {
+            let ni = (gi + di).rem_euclid(lat.cells);
+            let nj = (gj + dj).rem_euclid(lat.cells);
+
+            let jx = lat.jitter_lo + lat.jitter_span * cell_hash(ni, nj, lat.seed);
+            let jy = lat.jitter_lo + lat.jitter_span * cell_hash(nj, ni, lat.seed.wrapping_add(17));
+
+            // Site position in UV space.
+            let cx = (ni as f64 + jx) / lat.pos_scale;
+            let cy = (nj as f64 + jy) / lat.pos_scale;
+
+            let (adx, sdx) = wrap_delta(u, cx);
+            let (ady, sdy) = wrap_delta(v, cy);
+
+            visit(Site {
+                adx,
+                ady,
+                sdx,
+                sdy,
+                ci: ni,
+                cj: nj,
+            });
+        }
+    }
+}
+
+/// Sample a seamlessly-tiling cellular (Worley) lattice at `(u, v)`.
+///
+/// Returns the two nearest site distances and the owning cell — the building
+/// blocks for domed stones (`1 − F1`), crack masks
+/// ([`ridge`](CellularSample::ridge)), and per-cell colour variation (feed
+/// `cell_x`/`cell_y` to [`cell_hash`]).
+pub fn cellular(u: f64, v: f64, params: CellularParams) -> CellularSample {
+    let lat = Lattice::new(&params);
+    let metric = params.metric;
+
+    let mut f1 = f64::MAX;
+    let mut f2 = f64::MAX;
+    let mut cell_x = 0;
+    let mut cell_y = 0;
+
+    visit_sites(u, v, &lat, |s| {
+        let d = metric.distance(s.adx, s.ady);
+        if d < f1 {
+            f2 = f1;
+            f1 = d;
+            cell_x = s.ci;
+            cell_y = s.cj;
+        } else if d < f2 {
+            f2 = d;
+        }
+    });
+
+    CellularSample {
+        f1,
+        f2,
+        cell_x,
+        cell_y,
+    }
+}
+
+/// Distance from `(u, v)` to the nearest Voronoi *border*, in UV units.
+///
+/// Unlike [`ridge`](CellularSample::ridge), this measures the real distance to
+/// the cell wall, so thresholding it draws cracks of constant width no matter
+/// how large or small the surrounding cells are — the property that makes
+/// cracked mud, crackle glaze, and dry lakebeds read correctly.  It costs a
+/// second pass over the neighbourhood.
+///
+/// The border is found as the nearest perpendicular bisector between the
+/// owning site and each of its neighbours, following Inigo Quilez's
+/// [Voronoi edges](https://iquilezles.org/articles/voronoilines/).
+///
+/// `params.metric` is deliberately **ignored**: under a non-Euclidean metric a
+/// cell wall is not a perpendicular bisector, and constant width — the entire
+/// reason to prefer this over `F2 − F1` — is a Euclidean property.  Use
+/// [`cellular`] with `ridge()` if you want a non-Euclidean crack mask.
+///
+/// A single-cell lattice has no borders; that degenerate case returns `0.5`
+/// (half a tile away, i.e. "no wall anywhere near").
+pub fn cellular_edge(u: f64, v: f64, params: CellularParams) -> f64 {
+    let lat = Lattice::new(&params);
+
+    let mut sites = [Site::default(); NEIGHBOURHOOD];
+    let mut count = 0usize;
+    visit_sites(u, v, &lat, |s| {
+        sites[count] = s;
+        count += 1;
+    });
+    let sites = &sites[..count];
+
+    // Pass 1 — the site that owns this pixel.
+    let mut owner = 0usize;
+    let mut owner_d = f64::MAX;
+    for (i, s) in sites.iter().enumerate() {
+        let d = CellMetric::Euclidean.distance(s.adx, s.ady);
+        if d < owner_d {
+            owner_d = d;
+            owner = i;
+        }
+    }
+    let (mx, my) = (sites[owner].sdx, sites[owner].sdy);
+
+    // Pass 2 — nearest perpendicular bisector between the owner and any other
+    // site: project the midpoint of the two site vectors onto the axis joining
+    // them.
+    let mut edge = f64::MAX;
+    for (i, s) in sites.iter().enumerate() {
+        if i == owner {
+            continue;
+        }
+        let rx = s.sdx - mx;
+        let ry = s.sdy - my;
+        let len = (rx * rx + ry * ry).sqrt();
+        if len < SITE_EPSILON {
+            // Another wrapped image of the owning site, not a real neighbour.
+            continue;
+        }
+        let d = 0.5 * ((s.sdx + mx) * (rx / len) + (s.sdy + my) * (ry / len));
+        if d < edge {
+            edge = d;
+        }
+    }
+
+    if edge == f64::MAX { 0.5 } else { edge.max(0.0) }
+}
+
+/// Smooth-minimum variant of [`cellular`]'s `F1`, free of the derivative
+/// creases that make plain Worley noise look faceted.
+///
+/// Blends every site's contribution through `−ln(Σ e^(−k·d)) / k`, so cell
+/// boundaries melt into one another instead of meeting at a sharp ridge —
+/// suited to organic plating (chitin, leather, weathered stone) where hard
+/// cell walls would read as artificial.  `falloff` (`k`) controls the
+/// transition: ~8 is very soft, ~64 approaches plain `F1`.
+///
+/// The result is always ≤ the hard `F1`, since a softmin underestimates.
+pub fn cellular_smooth(u: f64, v: f64, params: CellularParams, falloff: f64) -> f64 {
+    let lat = Lattice::new(&params);
+    let metric = params.metric;
+    let k = falloff.max(MIN_FALLOFF);
+
+    let mut acc = 0.0;
+    let mut f1 = f64::MAX;
+
+    visit_sites(u, v, &lat, |s| {
+        let d = metric.distance(s.adx, s.ady);
+        if d < f1 {
+            f1 = d;
+        }
+        acc += (-k * d).exp();
+    });
+
+    // With an extreme `falloff` every term can underflow to zero; fall back to
+    // the hard minimum rather than returning an infinity.
+    if acc > 0.0 { -acc.ln() / k } else { f1 }
+}
+
 /// Grid-based toroidal Voronoi in UV space.
 ///
 /// Partitions `[0, 1]²` into `scale × scale` candidate cells and searches a
@@ -183,60 +580,55 @@ pub fn bilinear_sample_torus(grid: &[f64], w: usize, h: usize, u: f64, v: f64) -
 /// in UV units and `(best_i, best_j)` is the integer cell coordinate of the
 /// F1 site.  Shared by the cell-decomposition generators (cobblestone,
 /// lava).
+///
+/// Kept as a thin shim over [`visit_sites`] with the exact literals its
+/// historical output depends on, so cobblestone and lava stay bit-for-bit
+/// stable against their golden hashes.  New generators should call
+/// [`cellular`], which additionally offers metrics, a jitter knob, and
+/// integer-exact cell positions.
 pub(crate) fn toroidal_voronoi(u: f64, v: f64, scale: f64, seed: u32) -> (f64, f64, i64, i64) {
     let n = scale.round().max(1.0) as i64;
-    let su = u * scale;
-    let sv = v * scale;
-    let gi = su.floor() as i64;
-    let gj = sv.floor() as i64;
 
     let mut f1 = f64::MAX;
     let mut f2 = f64::MAX;
-    let mut best_i = gi;
-    let mut best_j = gj;
+    // Always overwritten by the first candidate; only a NaN query could leave
+    // these at their initial value.
+    let mut best_i = 0;
+    let mut best_j = 0;
 
-    for di in -2i64..=2 {
-        for dj in -2i64..=2 {
-            let ni = (gi + di).rem_euclid(n);
-            let nj = (gj + dj).rem_euclid(n);
+    // Historical jitter window: the middle 70% of each cell, i.e. [0.15, 0.85].
+    // Callers pre-round `scale`, so passing it as the position divisor matches
+    // `n` exactly.
+    let lat = Lattice {
+        cells: n,
+        pos_scale: scale,
+        jitter_lo: 0.15,
+        jitter_span: 0.70,
+        seed,
+    };
 
-            // Jitter: the site is placed within [0.15, 0.85] of its cell to
-            // avoid degenerate near-zero-area cells at the lattice corners.
-            let jx = 0.15 + 0.70 * cell_hash(ni, nj, seed);
-            let jy = 0.15 + 0.70 * cell_hash(nj, ni, seed.wrapping_add(17));
-
-            // Site position in UV space.
-            let cx = (ni as f64 + jx) / scale;
-            let cy = (nj as f64 + jy) / scale;
-
-            // Toroidal distance.
-            let mut dx = (u - cx).abs();
-            let mut dy = (v - cy).abs();
-            if dx > 0.5 {
-                dx = 1.0 - dx;
-            }
-            if dy > 0.5 {
-                dy = 1.0 - dy;
-            }
-            let d = (dx * dx + dy * dy).sqrt();
-
-            if d < f1 {
-                f2 = f1;
-                f1 = d;
-                best_i = ni;
-                best_j = nj;
-            } else if d < f2 {
-                f2 = d;
-            }
+    visit_sites(u, v, &lat, |s| {
+        let d = (s.adx * s.adx + s.ady * s.ady).sqrt();
+        if d < f1 {
+            f2 = f1;
+            f1 = d;
+            best_i = s.ci;
+            best_j = s.cj;
+        } else if d < f2 {
+            f2 = d;
         }
-    }
+    });
 
     (f1, f2, best_i, best_j)
 }
 
 /// Deterministic integer hash → \[0, 1\].  Drives Voronoi site jitter and
 /// per-cell variance for the cell-decomposition generators.
-pub(crate) fn cell_hash(bx: i64, by: i64, seed: u32) -> f64 {
+///
+/// Pair it with [`CellularSample`]'s `cell_x`/`cell_y` to give every cell its
+/// own stable colour, height, or orientation.  Vary `seed` to decorrelate
+/// several such attributes on the same lattice.
+pub fn cell_hash(bx: i64, by: i64, seed: u32) -> f64 {
     let mut h = seed as u64;
     h ^= (bx as u64).wrapping_mul(6_364_136_223_846_793_005);
     h ^= (by as u64).wrapping_mul(1_442_695_040_888_963_407);
@@ -290,5 +682,306 @@ mod tests {
                 "vertical seam at u={u}: {at_0} != {at_1}"
             );
         }
+    }
+
+    /// Verbatim copy of the Voronoi loop as it stood before it was folded into
+    /// [`visit_sites`].  Cobblestone and lava are pinned downstream by golden
+    /// image hashes, so the shared walker has to reproduce this *exactly* —
+    /// "visually identical" is not good enough.
+    fn legacy_toroidal_voronoi(u: f64, v: f64, scale: f64, seed: u32) -> (f64, f64, i64, i64) {
+        let n = scale.round().max(1.0) as i64;
+        let su = u * scale;
+        let sv = v * scale;
+        let gi = su.floor() as i64;
+        let gj = sv.floor() as i64;
+
+        let mut f1 = f64::MAX;
+        let mut f2 = f64::MAX;
+        let mut best_i = gi;
+        let mut best_j = gj;
+
+        for di in -2i64..=2 {
+            for dj in -2i64..=2 {
+                let ni = (gi + di).rem_euclid(n);
+                let nj = (gj + dj).rem_euclid(n);
+
+                let jx = 0.15 + 0.70 * cell_hash(ni, nj, seed);
+                let jy = 0.15 + 0.70 * cell_hash(nj, ni, seed.wrapping_add(17));
+
+                let cx = (ni as f64 + jx) / scale;
+                let cy = (nj as f64 + jy) / scale;
+
+                let mut dx = (u - cx).abs();
+                let mut dy = (v - cy).abs();
+                if dx > 0.5 {
+                    dx = 1.0 - dx;
+                }
+                if dy > 0.5 {
+                    dy = 1.0 - dy;
+                }
+                let d = (dx * dx + dy * dy).sqrt();
+
+                if d < f1 {
+                    f2 = f1;
+                    f1 = d;
+                    best_i = ni;
+                    best_j = nj;
+                } else if d < f2 {
+                    f2 = d;
+                }
+            }
+        }
+
+        (f1, f2, best_i, best_j)
+    }
+
+    #[test]
+    fn toroidal_voronoi_matches_legacy_bit_for_bit() {
+        // Integer scales only: every caller pre-rounds, which is what lets the
+        // shared walker divide by the integer cell count.
+        for scale in [1.0, 2.0, 6.0, 7.0, 16.0] {
+            for seed in [0u32, 7, 1234, u32::MAX] {
+                for yi in 0..29 {
+                    for xi in 0..29 {
+                        let u = xi as f64 / 29.0;
+                        let v = yi as f64 / 29.0;
+                        let (f1, f2, ci, cj) = toroidal_voronoi(u, v, scale, seed);
+                        let (lf1, lf2, lci, lcj) = legacy_toroidal_voronoi(u, v, scale, seed);
+                        assert_eq!(
+                            f1.to_bits(),
+                            lf1.to_bits(),
+                            "F1 drift at ({u}, {v}) scale={scale} seed={seed}: {f1} vs {lf1}"
+                        );
+                        assert_eq!(
+                            f2.to_bits(),
+                            lf2.to_bits(),
+                            "F2 drift at ({u}, {v}) scale={scale} seed={seed}: {f2} vs {lf2}"
+                        );
+                        assert_eq!((ci, cj), (lci, lcj), "cell drift at ({u}, {v})");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every metric, and all three samplers, must wrap at the tile edges.
+    #[test]
+    fn cellular_tiles_seamlessly() {
+        for metric in [
+            CellMetric::Euclidean,
+            CellMetric::Manhattan,
+            CellMetric::Chebyshev,
+        ] {
+            let params = CellularParams::new(5.0, 99).with_metric(metric);
+            for t in [0.0, 0.17, 0.5, 0.83] {
+                // Horizontal seam.
+                let a = cellular(0.0, t, params);
+                let b = cellular(1.0, t, params);
+                assert!(
+                    (a.f1 - b.f1).abs() < 1e-12 && (a.f2 - b.f2).abs() < 1e-12,
+                    "{metric:?} horizontal seam at v={t}: {a:?} vs {b:?}"
+                );
+                // Vertical seam.
+                let a = cellular(t, 0.0, params);
+                let b = cellular(t, 1.0, params);
+                assert!(
+                    (a.f1 - b.f1).abs() < 1e-12 && (a.f2 - b.f2).abs() < 1e-12,
+                    "{metric:?} vertical seam at u={t}: {a:?} vs {b:?}"
+                );
+
+                assert!(
+                    (cellular_edge(0.0, t, params) - cellular_edge(1.0, t, params)).abs() < 1e-12,
+                    "edge horizontal seam at v={t}"
+                );
+                assert!(
+                    (cellular_edge(t, 0.0, params) - cellular_edge(t, 1.0, params)).abs() < 1e-12,
+                    "edge vertical seam at u={t}"
+                );
+                assert!(
+                    (cellular_smooth(0.0, t, params, 32.0) - cellular_smooth(1.0, t, params, 32.0))
+                        .abs()
+                        < 1e-12,
+                    "smooth horizontal seam at v={t}"
+                );
+            }
+        }
+    }
+
+    /// With jitter disabled the lattice is perfectly regular, so a cell centre
+    /// sits exactly on its site.
+    #[test]
+    fn zero_jitter_pins_sites_to_cell_centres() {
+        let cells = 4.0;
+        let params = CellularParams::new(cells, 3).with_jitter(0.0);
+        for i in 0..4 {
+            for j in 0..4 {
+                let u = (i as f64 + 0.5) / cells;
+                let v = (j as f64 + 0.5) / cells;
+                let s = cellular(u, v, params);
+                assert!(
+                    s.f1 < 1e-15,
+                    "site not at cell centre ({i},{j}): F1={}",
+                    s.f1
+                );
+                assert_eq!((s.cell_x, s.cell_y), (i, j), "wrong owning cell");
+            }
+        }
+    }
+
+    /// Jitter actually moves sites off the centres it pins them to at 0.
+    #[test]
+    fn jitter_displaces_sites() {
+        let cells = 4.0;
+        let centre = 0.5 / cells;
+        let jittered = CellularParams::new(cells, 11).with_jitter(1.0);
+        let displaced = (0..4)
+            .flat_map(|i| (0..4).map(move |j| (i, j)))
+            .filter(|&(i, j)| {
+                let u = (i as f64 + 0.5) / cells;
+                let v = (j as f64 + 0.5) / cells;
+                cellular(u, v, jittered).f1 > 1e-6
+            })
+            .count();
+        assert_eq!(
+            displaced, 16,
+            "full jitter left some sites at their centres"
+        );
+        // …and no site escapes its own cell.
+        for i in 0..4 {
+            let u = (i as f64 + 0.5) / cells;
+            assert!(cellular(u, u, jittered).f1 < centre * 1.5);
+        }
+    }
+
+    /// The whole point of `cellular_edge`: it is the true distance to the cell
+    /// wall, so on a regular lattice the centre of a cell is exactly half a
+    /// cell from its border — and that holds at every lattice resolution.
+    #[test]
+    fn edge_measures_true_distance_to_the_wall() {
+        for cells in [4.0, 8.0, 16.0] {
+            let params = CellularParams::new(cells, 5).with_jitter(0.0);
+            let half = 0.5 / cells;
+
+            let centre = cellular_edge(0.5 / cells, 0.5 / cells, params);
+            assert!(
+                (centre - half).abs() < 1e-9,
+                "cells={cells}: centre-to-wall {centre} != {half}"
+            );
+
+            // Straddling the wall between cell 0 and cell 1 → distance ~0.
+            let on_wall = cellular_edge(1.0 / cells, 0.5 / cells, params);
+            assert!(on_wall < 1e-9, "cells={cells}: on-wall distance {on_wall}");
+        }
+    }
+
+    /// A one-cell lattice has no walls at all; the degenerate case must not
+    /// leak a sentinel or a NaN.
+    #[test]
+    fn edge_handles_single_cell_lattice() {
+        let params = CellularParams::new(1.0, 2);
+        let d = cellular_edge(0.3, 0.7, params);
+        assert!(d.is_finite() && d > 0.0, "single-cell edge was {d}");
+    }
+
+    /// Chebyshev ≤ Euclidean ≤ Manhattan holds for each individual site, so it
+    /// survives the minimum regardless of which site wins under each metric.
+    #[test]
+    fn metrics_are_ordered() {
+        for i in 0..17 {
+            for j in 0..17 {
+                let (u, v) = (i as f64 / 17.0, j as f64 / 17.0);
+                let base = CellularParams::new(6.0, 404);
+                let cheb = cellular(u, v, base.with_metric(CellMetric::Chebyshev)).f1;
+                let eucl = cellular(u, v, base.with_metric(CellMetric::Euclidean)).f1;
+                let manh = cellular(u, v, base.with_metric(CellMetric::Manhattan)).f1;
+                assert!(
+                    cheb <= eucl + 1e-12 && eucl <= manh + 1e-12,
+                    "metric order violated at ({u}, {v}): {cheb} / {eucl} / {manh}"
+                );
+            }
+        }
+    }
+
+    /// A softmin always undershoots the hard minimum, and tightens toward it
+    /// as the falloff grows.
+    #[test]
+    fn smooth_converges_to_f1() {
+        let params = CellularParams::new(6.0, 77);
+        for i in 0..13 {
+            for j in 0..13 {
+                let (u, v) = (i as f64 / 13.0, j as f64 / 13.0);
+                let f1 = cellular(u, v, params).f1;
+                let soft = cellular_smooth(u, v, params, 16.0);
+                let sharper = cellular_smooth(u, v, params, 256.0);
+                assert!(soft <= f1 + 1e-12, "softmin exceeded F1 at ({u}, {v})");
+                assert!(
+                    (sharper - f1).abs() <= (soft - f1).abs() + 1e-12,
+                    "higher falloff did not tighten toward F1 at ({u}, {v})"
+                );
+            }
+        }
+    }
+
+    /// An extreme falloff underflows every exponential term; the fallback must
+    /// still return the hard minimum rather than an infinity.
+    #[test]
+    fn smooth_survives_extreme_falloff() {
+        let params = CellularParams::new(6.0, 5);
+        for falloff in [0.0, 1e-9, 1e5, 1e12] {
+            let d = cellular_smooth(0.31, 0.62, params, falloff);
+            assert!(d.is_finite(), "falloff={falloff} produced {d}");
+        }
+    }
+
+    /// Degenerate configs are clamped rather than panicking or dividing by
+    /// zero, and reported cells always index a real lattice slot.
+    #[test]
+    fn params_clamp_degenerate_input() {
+        for scale in [-4.0, 0.0, 0.4] {
+            let s = cellular(0.5, 0.5, CellularParams::new(scale, 1));
+            assert!(s.f1.is_finite(), "scale={scale} produced {}", s.f1);
+            assert_eq!(
+                (s.cell_x, s.cell_y),
+                (0, 0),
+                "scale={scale} left the lattice"
+            );
+        }
+        // Out-of-range jitter clamps to the [0, 1] window.
+        let wild = CellularParams::new(4.0, 1).with_jitter(9.0);
+        let full = CellularParams::new(4.0, 1).with_jitter(1.0);
+        assert_eq!(cellular(0.3, 0.7, wild).f1, cellular(0.3, 0.7, full).f1);
+
+        let cells = 8;
+        let params = CellularParams::new(cells as f64, 12);
+        for i in 0..20 {
+            let s = cellular(i as f64 / 20.0, 0.42, params);
+            assert!(
+                (0..cells).contains(&s.cell_x) && (0..cells).contains(&s.cell_y),
+                "cell id out of range: {s:?}"
+            );
+        }
+    }
+
+    /// Same seed → same lattice; different seed → different lattice.
+    #[test]
+    fn cellular_is_seed_deterministic() {
+        let a = CellularParams::new(6.0, 1000);
+        let b = CellularParams::new(6.0, 1001);
+        let mut differed = 0;
+        for i in 0..23 {
+            let (u, v) = (i as f64 / 23.0, 0.37);
+            assert_eq!(
+                cellular(u, v, a).f1,
+                cellular(u, v, a).f1,
+                "not deterministic"
+            );
+            if (cellular(u, v, a).f1 - cellular(u, v, b).f1).abs() > 1e-9 {
+                differed += 1;
+            }
+        }
+        assert!(
+            differed > 15,
+            "seed barely changed the lattice ({differed}/23)"
+        );
     }
 }

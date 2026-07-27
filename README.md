@@ -120,7 +120,11 @@ implements [`TextureGenerator`].
 - [`generator`](src/generator.rs) — the [`TextureGenerator`] trait,
   [`TextureMap`] output type, mipmap generation, dimension validation.
 - [`noise`](src/noise.rs) — [`ToroidalNoise`] seamless-tiling wrapper,
-  grid samplers, toroidal Voronoi.
+  grid samplers, and the seamless cellular (Worley / Voronoi) family:
+  `cellular` (F1/F2 plus the owning cell), `cellular_edge` (true distance
+  to the cell wall, for cracks of constant width), and `cellular_smooth`
+  (softmin F1 for organic plating), all sharing one `CellularParams`
+  layout with selectable distance metric and site jitter.
 - [`surface`](src/surface.rs) / [`sprite`](src/sprite.rs) — shared drivers
   for the tileable-surface and sprite-atlas families (buffer packing,
   normal derivation, atlas layout).
