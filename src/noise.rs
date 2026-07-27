@@ -30,6 +30,16 @@
 //!   *constant* width regardless of cell size.
 //! - [`cellular_smooth`] — a softmin `F1` without the faceted creases of plain
 //!   Worley, for organic plating.
+//!
+//! # Oriented stripes
+//!
+//! [`stripe`] provides directional wave fields — wood grain, brushed metal,
+//! fabric ribs, dune ripple — as a cheap stand-in for phasor noise, with the
+//! same defining trait: uniform contrast everywhere, rather than the muddy
+//! mid-tones stacked FBM settles into.  [`StripeParams`] takes whole cycle
+//! counts per axis (which is what keeps the field seamless — see its docs),
+//! [`StripeProfile`] reshapes the wave, and a caller-supplied warp bends
+//! straight bands into flowing grain.
 
 use noise::NoiseFn;
 use rayon::prelude::*;
@@ -622,6 +632,154 @@ pub(crate) fn toroidal_voronoi(u: f64, v: f64, scale: f64, seed: u32) -> (f64, f
     (f1, f2, best_i, best_j)
 }
 
+/// Wave profile applied to a stripe field's phase.
+///
+/// Separating the profile from the phase is what makes this a usable stand-in
+/// for phasor noise: the same oriented field reads as wood grain, a brushed
+/// finish, or corduroy purely by reshaping the wave.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StripeProfile {
+    /// Smooth swell — brushed metal, satin sheen, gentle dune ripple.
+    #[default]
+    Sine,
+    /// Linear rise and fall to a crease — fabric ribs, corduroy.
+    Triangle,
+    /// Ramp with a hard reset — growth rings, strata, lapped boards.
+    Sawtooth,
+    /// Flat bands with defined edges — inlay, planking, woven tape.
+    Square,
+}
+
+impl StripeProfile {
+    /// Shape a phase in turns (`[0, 1)`) into a value in `[0, 1]`.
+    ///
+    /// `sharpness` in `[0, 1]` hardens the pattern: it narrows the edge for
+    /// [`Square`](Self::Square) and tightens the crest for the others.
+    pub fn shape(self, phase_turns: f64, sharpness: f64) -> f64 {
+        let t = phase_turns.rem_euclid(1.0);
+        let hardness = sharpness.clamp(0.0, 1.0);
+        match self {
+            Self::Square => {
+                // Edge width shrinks to nothing as sharpness approaches 1.
+                let edge = (1.0 - hardness).max(1e-4);
+                let s = (TAU * t).sin();
+                smoothstep(-edge, edge, s)
+            }
+            other => {
+                let base = match other {
+                    Self::Sine => 0.5 - 0.5 * (TAU * t).cos(),
+                    Self::Triangle => 1.0 - 2.0 * (t - 0.5).abs(),
+                    // Sawtooth is the ramp itself; the reset is the feature.
+                    _ => t,
+                };
+                base.clamp(0.0, 1.0).powf(1.0 + hardness * 3.0)
+            }
+        }
+    }
+}
+
+/// A seamless oriented stripe field.
+///
+/// # Why cycles instead of an angle
+///
+/// The obvious parameterisation — a direction and a frequency — does not
+/// tile.  `sin(dot(p, dir) · f)` only closes on itself when the frequency
+/// resolved along *each* axis is a whole number of cycles per tile, and for a
+/// free angle it almost never is; the seam shows as a phase jump down one
+/// edge.  Naming the per-axis cycle counts instead makes every representable
+/// field seamless by construction, with direction and wavelength falling out
+/// as derived quantities.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StripeParams {
+    /// Whole cycles across the tile horizontally.
+    pub cycles_u: i32,
+    /// Whole cycles across the tile vertically.
+    pub cycles_v: i32,
+    /// Wave shape.
+    pub profile: StripeProfile,
+    /// How hard the pattern's features are, in `[0, 1]`.
+    pub sharpness: f64,
+}
+
+impl StripeParams {
+    /// A sine field running at the given whole cycle counts per axis.
+    ///
+    /// `(n, 0)` gives vertical bands, `(0, n)` horizontal, `(n, n)` a 45°
+    /// diagonal.
+    pub fn new(cycles_u: i32, cycles_v: i32) -> Self {
+        Self {
+            cycles_u,
+            cycles_v,
+            profile: StripeProfile::default(),
+            sharpness: 0.0,
+        }
+    }
+
+    /// Reshape the wave.
+    #[must_use]
+    pub fn with_profile(mut self, profile: StripeProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    /// Set how hard the pattern's features are — see
+    /// [`sharpness`](Self::sharpness).
+    #[must_use]
+    pub fn with_sharpness(mut self, sharpness: f64) -> Self {
+        self.sharpness = sharpness;
+        self
+    }
+
+    /// Unit vector the stripes advance along, or `None` when the field is
+    /// constant.
+    pub fn direction(&self) -> Option<(f64, f64)> {
+        let (u, v) = (self.cycles_u as f64, self.cycles_v as f64);
+        let len = (u * u + v * v).sqrt();
+        (len > 0.0).then(|| (u / len, v / len))
+    }
+
+    /// Distance between successive bands in UV units, or infinity when the
+    /// field is constant.
+    pub fn wavelength(&self) -> f64 {
+        let (u, v) = (self.cycles_u as f64, self.cycles_v as f64);
+        let len = (u * u + v * v).sqrt();
+        if len > 0.0 { 1.0 / len } else { f64::INFINITY }
+    }
+}
+
+/// Phase of a stripe field at `(u, v)`, in turns within `[0, 1)`.
+///
+/// Useful when a generator wants the raw phase — to drive a hue shift or a
+/// second pattern locked to the same bands — rather than a shaped value.
+pub fn stripe_phase(u: f64, v: f64, params: StripeParams) -> f64 {
+    (params.cycles_u as f64 * u + params.cycles_v as f64 * v).rem_euclid(1.0)
+}
+
+/// Sample a stripe field at `(u, v)`, returning a value in `[0, 1]`.
+///
+/// `warp_turns` bends the bands by shifting the phase; feeding it a toroidal
+/// noise sample turns dead-straight stripes into flowing grain while keeping
+/// the result seamless, since a periodic phase plus a periodic warp is still
+/// periodic.  Pass `0.0` for a perfectly regular field.
+///
+/// Unlike stacked FBM, the output sweeps the full `[0, 1]` range everywhere
+/// rather than clustering around the middle — the uniform contrast that makes
+/// oriented patterns read as *material* instead of as haze.
+pub fn stripe(u: f64, v: f64, params: StripeParams, warp_turns: f64) -> f64 {
+    let phase = params.cycles_u as f64 * u + params.cycles_v as f64 * v + warp_turns;
+    params.profile.shape(phase, params.sharpness)
+}
+
+/// Hermite smoothstep between two edges, clamped outside them.
+#[inline]
+fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
+    if edge1 <= edge0 {
+        return if x >= edge1 { 1.0 } else { 0.0 };
+    }
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Deterministic integer hash → \[0, 1\].  Drives Voronoi site jitter and
 /// per-cell variance for the cell-decomposition generators.
 ///
@@ -959,6 +1117,223 @@ mod tests {
                 (0..cells).contains(&s.cell_x) && (0..cells).contains(&s.cell_y),
                 "cell id out of range: {s:?}"
             );
+        }
+    }
+
+    const PROFILES: [StripeProfile; 4] = [
+        StripeProfile::Sine,
+        StripeProfile::Triangle,
+        StripeProfile::Sawtooth,
+        StripeProfile::Square,
+    ];
+
+    /// Whole cycle counts exist precisely so the field closes on itself; a
+    /// free angle would leave a phase jump down one edge.
+    #[test]
+    fn stripe_tiles_seamlessly() {
+        for profile in PROFILES {
+            for (cu, cv) in [(4, 0), (0, 3), (3, 3), (5, -2), (1, 7)] {
+                let params = StripeParams::new(cu, cv)
+                    .with_profile(profile)
+                    .with_sharpness(0.6);
+                for t in [0.0, 0.13, 0.5, 0.77] {
+                    let (left, right) = (stripe(0.0, t, params, 0.0), stripe(1.0, t, params, 0.0));
+                    assert!(
+                        (left - right).abs() < 1e-9,
+                        "{profile:?} ({cu},{cv}) horizontal seam at v={t}: {left} vs {right}"
+                    );
+                    let (top, bottom) = (stripe(t, 0.0, params, 0.0), stripe(t, 1.0, params, 0.0));
+                    assert!(
+                        (top - bottom).abs() < 1e-9,
+                        "{profile:?} ({cu},{cv}) vertical seam at u={t}: {top} vs {bottom}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Bands must be constant along their own direction and vary across it.
+    #[test]
+    fn stripe_runs_perpendicular_to_its_cycles() {
+        // Vertical bands: constant as v sweeps.
+        let vertical = StripeParams::new(4, 0);
+        let reference = stripe(0.3, 0.0, vertical, 0.0);
+        for v in [0.2, 0.45, 0.9] {
+            assert!(
+                (stripe(0.3, v, vertical, 0.0) - reference).abs() < 1e-12,
+                "vertical bands varied along v"
+            );
+        }
+        assert!(
+            (stripe(0.3, 0.0, vertical, 0.0) - stripe(0.42, 0.0, vertical, 0.0)).abs() > 1e-6,
+            "vertical bands did not vary across u"
+        );
+
+        // Diagonal bands: constant along the anti-diagonal u + v = k.
+        let diagonal = StripeParams::new(3, 3);
+        let along = stripe(0.1, 0.6, diagonal, 0.0);
+        for (u, v) in [(0.2, 0.5), (0.3, 0.4), (0.55, 0.15)] {
+            assert!(
+                (stripe(u, v, diagonal, 0.0) - along).abs() < 1e-12,
+                "diagonal bands varied along their own direction at ({u}, {v})"
+            );
+        }
+    }
+
+    /// Reshaping the wave is the point — the profiles must not collapse into
+    /// one another.
+    #[test]
+    fn profiles_are_distinct() {
+        let sample = |profile| {
+            (0..32)
+                .map(|i| {
+                    stripe(
+                        i as f64 / 32.0,
+                        0.0,
+                        StripeParams::new(2, 0).with_profile(profile),
+                        0.0,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        for (a, b) in [
+            (StripeProfile::Sine, StripeProfile::Triangle),
+            (StripeProfile::Triangle, StripeProfile::Sawtooth),
+            (StripeProfile::Sawtooth, StripeProfile::Square),
+            (StripeProfile::Square, StripeProfile::Sine),
+        ] {
+            let (xs, ys) = (sample(a), sample(b));
+            let spread = xs
+                .iter()
+                .zip(&ys)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0.0f64, f64::max);
+            assert!(spread > 0.05, "{a:?} and {b:?} produce the same field");
+        }
+    }
+
+    /// A sharp square wave should sit at its two levels, not ramp between.
+    #[test]
+    fn square_profile_is_bimodal_when_sharp() {
+        let params = StripeParams::new(3, 0)
+            .with_profile(StripeProfile::Square)
+            .with_sharpness(0.97);
+        let samples = 400;
+        let midband = (0..samples)
+            .map(|i| stripe(i as f64 / samples as f64, 0.0, params, 0.0))
+            .filter(|v| (0.1..0.9).contains(v))
+            .count();
+        assert!(
+            midband * 10 < samples,
+            "sharp square spent {midband}/{samples} of its range mid-transition"
+        );
+    }
+
+    /// The sawtooth's hard reset is its defining feature.
+    #[test]
+    fn sawtooth_ramps_then_resets() {
+        let params = StripeParams::new(1, 0).with_profile(StripeProfile::Sawtooth);
+        let mut previous = stripe(0.0, 0.0, params, 0.0);
+        for i in 1..20 {
+            let value = stripe(i as f64 / 20.0, 0.0, params, 0.0);
+            assert!(value > previous, "sawtooth did not rise at step {i}");
+            previous = value;
+        }
+        // …and drops back at the wrap rather than easing down.
+        assert!(
+            stripe(0.999, 0.0, params, 0.0) - stripe(0.001, 0.0, params, 0.0) > 0.9,
+            "sawtooth did not reset across the period boundary"
+        );
+    }
+
+    /// Uniform contrast is the property that separates an oriented field from
+    /// stacked FBM, which clusters around its midpoint.
+    #[test]
+    fn stripe_sweeps_the_full_range() {
+        for profile in PROFILES {
+            let params = StripeParams::new(5, 0).with_profile(profile);
+            let values: Vec<f64> = (0..200)
+                .map(|i| stripe(i as f64 / 200.0, 0.37, params, 0.0))
+                .collect();
+            let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+            let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            // Not quite `0..1`: the sawtooth resets exactly at the period
+            // boundary, so its supremum is approached but never sampled.
+            assert!(
+                min < 0.05 && max > 0.95,
+                "{profile:?} only spanned {min:.3}..{max:.3}"
+            );
+        }
+    }
+
+    /// Warping bends the bands, and a periodic warp keeps the seam closed.
+    #[test]
+    fn warp_bends_the_field_but_keeps_the_seam() {
+        let params = StripeParams::new(4, 0);
+        // A warp that is itself periodic across the tile.
+        let warp = |u: f64, v: f64| 0.3 * (TAU * u).sin() * (TAU * v).cos();
+
+        let mut bent = 0;
+        for i in 0..40 {
+            let (u, v) = (i as f64 / 40.0, 0.3);
+            let straight = stripe(u, v, params, 0.0);
+            let warped = stripe(u, v, params, warp(u, v));
+            if (straight - warped).abs() > 1e-6 {
+                bent += 1;
+            }
+        }
+        assert!(bent > 20, "warp barely moved the field ({bent}/40)");
+
+        for v in [0.0, 0.2, 0.65] {
+            let left = stripe(0.0, v, params, warp(0.0, v));
+            let right = stripe(1.0, v, params, warp(1.0, v));
+            assert!(
+                (left - right).abs() < 1e-9,
+                "warped field broke the seam at v={v}"
+            );
+        }
+    }
+
+    /// Direction and wavelength must describe the field the cycles actually
+    /// produce, including the degenerate constant case.
+    #[test]
+    fn direction_and_wavelength_follow_the_cycles() {
+        let horizontal = StripeParams::new(4, 0);
+        assert_eq!(horizontal.direction(), Some((1.0, 0.0)));
+        assert!((horizontal.wavelength() - 0.25).abs() < 1e-12);
+
+        let diagonal = StripeParams::new(3, 4);
+        let (dx, dy) = diagonal.direction().expect("non-constant");
+        assert!((dx - 0.6).abs() < 1e-12 && (dy - 0.8).abs() < 1e-12);
+        assert!((diagonal.wavelength() - 0.2).abs() < 1e-12);
+
+        let constant = StripeParams::new(0, 0);
+        assert_eq!(constant.direction(), None);
+        assert!(constant.wavelength().is_infinite());
+    }
+
+    /// A constant field and out-of-range sharpness must stay well-defined.
+    #[test]
+    fn degenerate_stripe_params_stay_finite() {
+        let constant = StripeParams::new(0, 0);
+        let a = stripe(0.2, 0.8, constant, 0.0);
+        let b = stripe(0.9, 0.1, constant, 0.0);
+        assert!(
+            a.is_finite() && (a - b).abs() < 1e-12,
+            "constant field varied"
+        );
+
+        for sharpness in [-5.0, 0.0, 1.0, 9.0] {
+            for profile in PROFILES {
+                let params = StripeParams::new(3, 1)
+                    .with_profile(profile)
+                    .with_sharpness(sharpness);
+                let value = stripe(0.31, 0.62, params, 0.0);
+                assert!(
+                    value.is_finite() && (0.0..=1.0).contains(&value),
+                    "{profile:?} at sharpness {sharpness} produced {value}"
+                );
+            }
         }
     }
 

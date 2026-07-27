@@ -124,7 +124,9 @@ implements [`TextureGenerator`].
   `cellular` (F1/F2 plus the owning cell), `cellular_edge` (true distance
   to the cell wall, for cracks of constant width), and `cellular_smooth`
   (softmin F1 for organic plating), all sharing one `CellularParams`
-  layout with selectable distance metric and site jitter.
+  layout with selectable distance metric and site jitter. Plus `stripe`,
+  a seamless oriented wave field (sine / triangle / sawtooth / square,
+  warpable into flowing grain) for wood, brushed metal and fabric ribs.
 - [`surface`](src/surface.rs) / [`sprite`](src/sprite.rs) — shared drivers
   for the tileable-surface and sprite-atlas families (buffer packing,
   normal derivation, atlas layout).
