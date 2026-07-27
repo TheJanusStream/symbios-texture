@@ -11,10 +11,11 @@ crate, which re-exports this crate wholesale.
 
 ## What you get
 
-- **48 generators** covering building materials (brick, ashlar, plank,
-  stucco, metal, …), natural surfaces (rock, ground, sand, snow, ice,
-  lava, …), vegetation (bark, leaf, grass, moss, lichen, cactus, …), and
-  particle sprites (spark, puff, snowflake, flame, …).
+- **55 generators** covering building materials (brick, ashlar, plank,
+  stucco, metal, enamel, …), natural surfaces (rock, ground, sand, snow,
+  ice, lava, cracked earth, gravel, …), vegetation (bark, leaf, grass, moss,
+  lichen, cactus, forest floor, …), and particle sprites (spark, puff,
+  snowflake, flame, …).
 - **Full PBR output**: every generator produces an albedo map (sRGB), a
   tangent-space normal map, and an ORM (occlusion/roughness/metallic) map;
   glowing materials (lava) add an emissive map. Optional CPU-side mipmap
@@ -103,10 +104,11 @@ wrapper crate consumes via the `for_each_generator!` macro. Two kinds:
 - **Card** — alpha-masked cutouts (foliage, windows, particles), meant for
   clamp-to-edge samplers; most can bake variant atlases.
 
-- **Surface** (29): ashlar, asphalt, bark, brick, cactus (skin),
-  cobblestone, concrete, corrugated, cracked earth, encaustic, fabric,
-  forest floor, gravel, ground, ice, lava, lichen, marble, metal, moss,
-  pavers, plank, rock, sand, shingle, snow, stucco, thatch, wainscoting
+- **Surface** (33): ashlar, asphalt, bark, brick, cactus (skin), chitin,
+  cobblestone, concrete, corrugated, cracked earth, enamel, encaustic,
+  fabric, forest floor, gravel, ground, ice, lava, lichen, marble, metal,
+  moss, obsidian, pavers, plank, rock, sand, shingle, snow, solar panel,
+  stucco, thatch, wainscoting
 - **Card** (22): broadleaf, chain link, flame, flower, frond, grass tuft,
   iron grille, leaf, leaf sprite, log end, needle, petal, puff, reed, ring,
   shard, snowflake, soft disc, spark, stained glass, twig, window
