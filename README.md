@@ -138,6 +138,9 @@ implements [`TextureGenerator`].
   settled into recesses and onto upward-facing lips, and runoff streaks
   drawn down from ledges. `WeatheringConfig::default()` disables every
   layer, so embedding it costs nothing until a layer is turned up.
+- [`palette`](src/palette.rs) — `CosinePalette`, a four-vector colour ramp
+  (`bias + amplitude·cos(2π(frequency·t + phase))`) for when one scalar has
+  to drive a varied sweep of colour that a two-colour lerp flattens.
 - [`normal`](src/normal.rs) — heightmap → tangent-space normal map.
 - [`genetics`](src/genetics.rs) — `Genotype` impls for all configs.
 - [`fingerprint`](src/fingerprint.rs) — stable structural hashing of

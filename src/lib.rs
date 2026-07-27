@@ -63,6 +63,7 @@ pub mod needle;
 pub mod noise;
 pub mod normal;
 pub mod obsidian;
+pub mod palette;
 pub mod pavers;
 pub mod petal;
 pub mod plank;

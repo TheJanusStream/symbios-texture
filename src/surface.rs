@@ -50,7 +50,8 @@ pub struct SurfaceSample {
     pub occlusion: f32,
     /// Emissive (glow) colour in linear RGB `[0, 1]`.  Ignored by
     /// [`generate_surface`]; collected into the texture map's emissive
-    /// channel by [`generate_surface_emissive`].
+    /// channel by [`generate_surface_emissive`], or at the generator's
+    /// discretion via [`SurfaceOptions::emissive`].
     pub emissive: [f32; 3],
 }
 
@@ -165,7 +166,81 @@ pub fn generate_surface<C: SurfaceCell + Sync>(
     workspace: Option<&mut Workspace>,
     cell: &C,
 ) -> Result<TextureMap, TextureError> {
-    generate_surface_impl(width, height, normal_strength, workspace, cell, false)
+    generate_surface_with(
+        width,
+        height,
+        normal_strength,
+        workspace,
+        cell,
+        SurfaceOptions::default(),
+    )
+}
+
+/// What a surface bake should collect beyond albedo, normal and ORM.
+///
+/// The four named entry points cover the fixed combinations; this covers the
+/// case they cannot, where a generator decides from its *config* whether to
+/// glow.  Committing to `generate_surface_emissive` at the call site forces
+/// every bake to carry an emissive buffer even when the material's glow is
+/// turned off.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SurfaceOptions<'a> {
+    /// Collect [`SurfaceSample::emissive`] into the map's emissive channel.
+    pub emissive: bool,
+    /// Age the result through the [`weathering`](crate::weathering) post-pass.
+    pub weathering: Option<&'a WeatheringConfig>,
+}
+
+impl<'a> SurfaceOptions<'a> {
+    /// Collect the emissive channel.
+    #[must_use]
+    pub fn with_emissive(mut self, emissive: bool) -> Self {
+        self.emissive = emissive;
+        self
+    }
+
+    /// Age the surface through `weathering`.
+    #[must_use]
+    pub fn with_weathering(mut self, weathering: &'a WeatheringConfig) -> Self {
+        self.weathering = Some(weathering);
+        self
+    }
+}
+
+/// Render a tileable surface, choosing the emissive and weathering passes at
+/// runtime — see [`SurfaceOptions`].
+///
+/// This is the single entry point the named variants delegate to, so the
+/// decision about which passes run lives in exactly one place.
+pub fn generate_surface_with<C: SurfaceCell + Sync>(
+    width: u32,
+    height: u32,
+    normal_strength: f32,
+    workspace: Option<&mut Workspace>,
+    cell: &C,
+    options: SurfaceOptions<'_>,
+) -> Result<TextureMap, TextureError> {
+    // A no-op weathering config takes the plain path, which skips the float
+    // field grid entirely rather than allocating it to change nothing.
+    match options.weathering.filter(|w| !w.is_noop()) {
+        Some(weathering) => generate_surface_weathered_impl(
+            width,
+            height,
+            normal_strength,
+            workspace,
+            cell,
+            weathering,
+            options.emissive,
+        ),
+        None => generate_surface_impl(
+            width,
+            height,
+            normal_strength,
+            workspace,
+            cell,
+            options.emissive,
+        ),
+    }
 }
 
 /// [`generate_surface`] variant that also collects the per-sample
@@ -182,7 +257,14 @@ pub fn generate_surface_emissive<C: SurfaceCell + Sync>(
     workspace: Option<&mut Workspace>,
     cell: &C,
 ) -> Result<TextureMap, TextureError> {
-    generate_surface_impl(width, height, normal_strength, workspace, cell, true)
+    generate_surface_with(
+        width,
+        height,
+        normal_strength,
+        workspace,
+        cell,
+        SurfaceOptions::default().with_emissive(true),
+    )
 }
 
 /// [`generate_surface`] variant that ages the result through the
@@ -204,14 +286,13 @@ pub fn generate_surface_weathered<C: SurfaceCell + Sync>(
     cell: &C,
     weathering: &WeatheringConfig,
 ) -> Result<TextureMap, TextureError> {
-    generate_surface_weathered_impl(
+    generate_surface_with(
         width,
         height,
         normal_strength,
         workspace,
         cell,
-        weathering,
-        false,
+        SurfaceOptions::default().with_weathering(weathering),
     )
 }
 
@@ -228,14 +309,15 @@ pub fn generate_surface_weathered_emissive<C: SurfaceCell + Sync>(
     cell: &C,
     weathering: &WeatheringConfig,
 ) -> Result<TextureMap, TextureError> {
-    generate_surface_weathered_impl(
+    generate_surface_with(
         width,
         height,
         normal_strength,
         workspace,
         cell,
-        weathering,
-        true,
+        SurfaceOptions::default()
+            .with_weathering(weathering)
+            .with_emissive(true),
     )
 }
 
@@ -248,9 +330,6 @@ fn generate_surface_weathered_impl<C: SurfaceCell + Sync>(
     weathering: &WeatheringConfig,
     emit: bool,
 ) -> Result<TextureMap, TextureError> {
-    if weathering.is_noop() {
-        return generate_surface_impl(width, height, normal_strength, workspace, cell, emit);
-    }
     validate_dimensions(width, height)?;
 
     let w = width as usize;
@@ -634,6 +713,118 @@ mod tests {
             "weathering dimmed the emissive channel"
         );
         assert_ne!(plain.albedo, aged.albedo, "weathering never reached albedo");
+    }
+
+    /// Every named entry point must be exactly the corresponding
+    /// `SurfaceOptions` combination — they delegate, so a divergence would
+    /// mean the decision leaked back out into two places.
+    #[test]
+    fn options_reproduce_every_named_entry_point() {
+        let weathering = weathered_config();
+        let cases: [(&str, TextureMap, TextureMap); 4] = [
+            (
+                "plain",
+                generate_surface(32, 32, 1.0, None, &Ridged).expect("plain"),
+                generate_surface_with(32, 32, 1.0, None, &Ridged, SurfaceOptions::default())
+                    .expect("with"),
+            ),
+            (
+                "emissive",
+                generate_surface_emissive(32, 32, 1.0, None, &Ridged).expect("plain"),
+                generate_surface_with(
+                    32,
+                    32,
+                    1.0,
+                    None,
+                    &Ridged,
+                    SurfaceOptions::default().with_emissive(true),
+                )
+                .expect("with"),
+            ),
+            (
+                "weathered",
+                generate_surface_weathered(32, 32, 1.0, None, &Ridged, &weathering).expect("plain"),
+                generate_surface_with(
+                    32,
+                    32,
+                    1.0,
+                    None,
+                    &Ridged,
+                    SurfaceOptions::default().with_weathering(&weathering),
+                )
+                .expect("with"),
+            ),
+            (
+                "weathered+emissive",
+                generate_surface_weathered_emissive(32, 32, 1.0, None, &Ridged, &weathering)
+                    .expect("plain"),
+                generate_surface_with(
+                    32,
+                    32,
+                    1.0,
+                    None,
+                    &Ridged,
+                    SurfaceOptions::default()
+                        .with_weathering(&weathering)
+                        .with_emissive(true),
+                )
+                .expect("with"),
+            ),
+        ];
+
+        for (name, named, via_options) in cases {
+            assert_eq!(named.albedo, via_options.albedo, "{name} albedo diverged");
+            assert_eq!(named.normal, via_options.normal, "{name} normal diverged");
+            assert_eq!(
+                named.roughness, via_options.roughness,
+                "{name} ORM diverged"
+            );
+            assert_eq!(
+                named.emissive, via_options.emissive,
+                "{name} emissive diverged"
+            );
+        }
+    }
+
+    /// The point of the runtime option: one generator, one call site, glow
+    /// decided by config — and no emissive buffer paid for when it is off.
+    #[test]
+    fn emissive_is_a_runtime_choice() {
+        let bake = |emissive| {
+            generate_surface_with(
+                16,
+                16,
+                1.0,
+                None,
+                &Ridged,
+                SurfaceOptions::default().with_emissive(emissive),
+            )
+            .expect("bake")
+        };
+        assert!(bake(false).emissive.is_none(), "glow collected while off");
+        assert!(bake(true).emissive.is_some(), "glow missing while on");
+        // Everything else about the bake is unchanged by the choice.
+        assert_eq!(bake(false).albedo, bake(true).albedo);
+    }
+
+    /// A no-op weathering config must route to the plain path rather than
+    /// allocating the float field grid to change nothing.
+    #[test]
+    fn noop_weathering_option_matches_no_weathering_at_all() {
+        let noop = crate::weathering::WeatheringConfig::default();
+        let with_noop = generate_surface_with(
+            32,
+            32,
+            1.0,
+            None,
+            &Ridged,
+            SurfaceOptions::default().with_weathering(&noop),
+        )
+        .expect("noop");
+        let without = generate_surface_with(32, 32, 1.0, None, &Ridged, SurfaceOptions::default())
+            .expect("none");
+        assert_eq!(with_noop.albedo, without.albedo);
+        assert_eq!(with_noop.normal, without.normal);
     }
 
     #[test]
