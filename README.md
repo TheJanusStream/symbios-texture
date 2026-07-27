@@ -103,10 +103,10 @@ wrapper crate consumes via the `for_each_generator!` macro. Two kinds:
 - **Card** — alpha-masked cutouts (foliage, windows, particles), meant for
   clamp-to-edge samplers; most can bake variant atlases.
 
-- **Surface** (26): ashlar, asphalt, bark, brick, cactus (skin),
-  cobblestone, concrete, corrugated, encaustic, fabric, ground, ice, lava,
-  lichen, marble, metal, moss, pavers, plank, rock, sand, shingle, snow,
-  stucco, thatch, wainscoting
+- **Surface** (29): ashlar, asphalt, bark, brick, cactus (skin),
+  cobblestone, concrete, corrugated, cracked earth, encaustic, fabric,
+  forest floor, gravel, ground, ice, lava, lichen, marble, metal, moss,
+  pavers, plank, rock, sand, shingle, snow, stucco, thatch, wainscoting
 - **Card** (22): broadleaf, chain link, flame, flower, frond, grass tuft,
   iron grille, leaf, leaf sprite, log end, needle, petal, puff, reed, ring,
   shard, snowflake, soft disc, spark, stained glass, twig, window

@@ -35,12 +35,15 @@ use crate::{
     cobblestone::CobblestoneConfig,
     concrete::ConcreteConfig,
     corrugated::CorrugatedConfig,
+    cracked_earth::CrackedEarthConfig,
     encaustic::{EncausticConfig, EncausticPattern},
     fabric::FabricConfig,
     flame::FlameConfig,
     flower::FlowerConfig,
+    forest_floor::ForestFloorConfig,
     frond::FrondConfig,
     grass::GrassTuftConfig,
+    gravel::GravelConfig,
     ground::GroundConfig,
     ice::IceConfig,
     iron_grille::IronGrilleConfig,
@@ -72,6 +75,7 @@ use crate::{
     thatch::ThatchConfig,
     twig::TwigConfig,
     wainscoting::WainscotingConfig,
+    weathering::{Corrosion, CreviceDirt, EdgeWear, Streaks, WeatheringConfig},
     window::WindowConfig,
 };
 
@@ -297,7 +301,56 @@ impl_genotype!(RockConfig {
     attenuation: f64(0.25, 1.0, 4.0),
     color_light: color3(0.07),
     color_dark: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 8.0),
+});
+
+// The weathering layer is evolvable like any other config, so a search can
+// discover how a material ages rather than only what it is made of.
+impl_genotype!(EdgeWear {
+    amount: f32(0.1, 0.0, 1.0),
+    color: color3(0.06),
+    threshold: f64(0.08, 0.0, 1.0),
+    breakup_scale: f64(1.5, 1.0, 32.0),
+    roughness: f32(0.08, 0.0, 1.0),
+    metallic: f32(0.1, 0.0, 1.0),
+});
+
+impl_genotype!(Corrosion {
+    amount: f32(0.1, 0.0, 1.0),
+    color: color3(0.06),
+    coverage: f32(0.08, 0.0, 1.0),
+    spread: f64(0.02, 0.0, 0.25),
+    barrier_scale: f64(1.0, 1.0, 24.0),
+    relief: f64(0.02, 0.0, 0.5),
+    roughness: f32(0.08, 0.0, 1.0),
+    metallic: f32(0.08, 0.0, 1.0),
+});
+
+impl_genotype!(CreviceDirt {
+    amount: f32(0.1, 0.0, 1.0),
+    color: color3(0.05),
+    depth: f64(0.01, 0.005, 0.25),
+    gravity: f32(0.1, 0.0, 1.0),
+    roughness: f32(0.06, 0.0, 1.0),
+    occlusion: f32(0.08, 0.0, 1.0),
+});
+
+impl_genotype!(Streaks {
+    amount: f32(0.1, 0.0, 1.0),
+    color: color3(0.05),
+    density: f32(0.1, 0.0, 1.0),
+    length: f64(0.06, 0.0, 1.0),
+    wander: f64(0.15, 0.0, 4.0),
+    roughness: f32(0.06, 0.0, 1.0),
+});
+
+impl_genotype!(WeatheringConfig {
+    seed: seed,
+    edge_wear: genotype,
+    corrosion: genotype,
+    crevice_dirt: genotype,
+    streaks: genotype,
 });
 
 impl_genotype!(GroundConfig {
@@ -875,6 +928,58 @@ impl_genotype!(LavaConfig {
     color_crust: color3(0.04),
     color_glow: color3(0.07),
     emissive_intensity: f32(0.3, 0.0, 4.0),
+    normal_strength: f32(0.3, 0.5, 6.0),
+});
+
+impl_genotype!(CrackedEarthConfig {
+    seed: seed,
+    scale: f64(0.8, 2.0, 20.0),
+    jitter: f64(0.1, 0.0, 1.0),
+    crack_width: f64(0.002, 0.001, 0.03),
+    crack_depth: f64(0.1, 0.0, 1.5),
+    curl: f64(0.05, 0.0, 0.8),
+    curl_reach: f64(0.008, 0.005, 0.12),
+    plate_variance: f32(0.03, 0.0, 0.4),
+    grain_scale: f64(3.0, 4.0, 64.0),
+    grain_strength: f64(0.03, 0.0, 0.5),
+    color_plate: color3(0.06),
+    color_crack: color3(0.05),
+    normal_strength: f32(0.3, 0.5, 6.0),
+});
+
+impl_genotype!(GravelConfig {
+    seed: seed,
+    scale: f64(2.0, 4.0, 64.0),
+    metric: enum_cycle([
+        crate::noise::CellMetric::Euclidean,
+        crate::noise::CellMetric::Manhattan,
+        crate::noise::CellMetric::Chebyshev
+    ]),
+    jitter: f64(0.1, 0.0, 1.0),
+    roundness: f64(0.2, 0.2, 4.0),
+    size_variance: f64(0.1, 0.0, 1.0),
+    cell_variance: f32(0.03, 0.0, 0.5),
+    fines_level: f64(0.1, 0.0, 1.0),
+    grain_scale: f64(6.0, 8.0, 128.0),
+    color_stone: color3(0.06),
+    color_dark: color3(0.05),
+    color_fines: color3(0.05),
+    normal_strength: f32(0.3, 0.5, 6.0),
+});
+
+impl_genotype!(ForestFloorConfig {
+    seed: seed,
+    litter_scale: f64(0.8, 2.0, 24.0),
+    layers: usize(1, 4),
+    coverage: f64(0.1, 0.0, 1.0),
+    leaf_length: f64(0.15, 0.3, 2.5),
+    leaf_width: f64(0.08, 0.1, 1.0),
+    leaf_thickness: f64(0.06, 0.0, 1.0),
+    midrib: f32(0.06, 0.0, 1.0),
+    humus_scale: f64(2.0, 2.0, 48.0),
+    color_humus: color3(0.04),
+    color_leaf: color3(0.07),
+    color_leaf_old: color3(0.06),
     normal_strength: f32(0.3, 0.5, 6.0),
 });
 
