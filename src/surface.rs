@@ -28,6 +28,7 @@ use rayon::prelude::*;
 use crate::{
     generator::{TextureError, TextureMap, Workspace, linear_to_srgb, validate_dimensions},
     normal::{BoundaryMode, height_to_normal},
+    weathering::WeatheringConfig,
 };
 
 /// One point sample of a tileable surface.
@@ -67,6 +68,54 @@ impl SurfaceSample {
             emissive: [0.0, 0.0, 0.0],
         }
     }
+}
+
+/// The shading half of a [`SurfaceSample`], retained in float form between
+/// sampling and byte packing.
+///
+/// [`generate_surface_weathered`] keeps a grid of these so the
+/// [`weathering`](crate::weathering) post-pass can blend against real linear
+/// values; the unweathered driver packs straight to bytes and never
+/// materialises the grid.  Height lives outside this struct because the
+/// driver already keeps a height grid of its own for normal derivation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceField {
+    /// Linear RGB albedo in `[0, 1]`.
+    pub color: [f32; 3],
+    /// PBR roughness `[0, 1]` (ORM green channel).
+    pub roughness: f32,
+    /// PBR metallic `[0, 1]` (ORM blue channel).
+    pub metallic: f32,
+    /// Ambient occlusion `[0, 1]` (ORM red channel).
+    pub occlusion: f32,
+}
+
+impl From<&SurfaceSample> for SurfaceField {
+    fn from(s: &SurfaceSample) -> Self {
+        Self {
+            color: s.color,
+            roughness: s.roughness,
+            metallic: s.metallic,
+            occlusion: s.occlusion,
+        }
+    }
+}
+
+/// Pack one shaded texel into its albedo and ORM slots.
+///
+/// Shared by both drivers so the sRGB encoding and O/R/M channel order have
+/// exactly one definition.
+#[inline]
+fn pack_texel(f: &SurfaceField, albedo_px: &mut [u8], orm_px: &mut [u8]) {
+    albedo_px[0] = linear_to_srgb(f.color[0]);
+    albedo_px[1] = linear_to_srgb(f.color[1]);
+    albedo_px[2] = linear_to_srgb(f.color[2]);
+    albedo_px[3] = 255;
+
+    orm_px[0] = (f.occlusion.clamp(0.0, 1.0) * 255.0).round() as u8;
+    orm_px[1] = (f.roughness.clamp(0.0, 1.0) * 255.0).round() as u8;
+    orm_px[2] = (f.metallic.clamp(0.0, 1.0) * 255.0).round() as u8;
+    orm_px[3] = 255;
 }
 
 /// A fully-instantiated surface sampler: configuration plus any precomputed
@@ -136,6 +185,185 @@ pub fn generate_surface_emissive<C: SurfaceCell + Sync>(
     generate_surface_impl(width, height, normal_strength, workspace, cell, true)
 }
 
+/// [`generate_surface`] variant that ages the result through the
+/// [`weathering`](crate::weathering) post-pass before packing.
+///
+/// Weathering masks are neighbourhood operations on the height field, so this
+/// driver samples into float fields, ages them, and packs afterwards — the
+/// normal map is derived from the *aged* height field, which is what lets
+/// corrosion crust read as raised.
+///
+/// A no-op [`WeatheringConfig`] delegates straight to [`generate_surface`],
+/// so a generator can route through this unconditionally and pay nothing
+/// until a layer is switched on.
+pub fn generate_surface_weathered<C: SurfaceCell + Sync>(
+    width: u32,
+    height: u32,
+    normal_strength: f32,
+    workspace: Option<&mut Workspace>,
+    cell: &C,
+    weathering: &WeatheringConfig,
+) -> Result<TextureMap, TextureError> {
+    generate_surface_weathered_impl(
+        width,
+        height,
+        normal_strength,
+        workspace,
+        cell,
+        weathering,
+        false,
+    )
+}
+
+/// [`generate_surface_weathered`] with the emissive channel collected, for
+/// glowing materials that also age.
+///
+/// Weathering never touches emissive: a stain dulls the surface around a glow
+/// without dimming the glow itself.
+pub fn generate_surface_weathered_emissive<C: SurfaceCell + Sync>(
+    width: u32,
+    height: u32,
+    normal_strength: f32,
+    workspace: Option<&mut Workspace>,
+    cell: &C,
+    weathering: &WeatheringConfig,
+) -> Result<TextureMap, TextureError> {
+    generate_surface_weathered_impl(
+        width,
+        height,
+        normal_strength,
+        workspace,
+        cell,
+        weathering,
+        true,
+    )
+}
+
+fn generate_surface_weathered_impl<C: SurfaceCell + Sync>(
+    width: u32,
+    height: u32,
+    normal_strength: f32,
+    mut workspace: Option<&mut Workspace>,
+    cell: &C,
+    weathering: &WeatheringConfig,
+    emit: bool,
+) -> Result<TextureMap, TextureError> {
+    if weathering.is_noop() {
+        return generate_surface_impl(width, height, normal_strength, workspace, cell, emit);
+    }
+    validate_dimensions(width, height)?;
+
+    let w = width as usize;
+    let h = height as usize;
+    let n = w * h;
+
+    let mut heights = workspace
+        .as_deref_mut()
+        .map_or_else(Vec::new, |ws| ws.take_grid());
+    heights.clear();
+    heights.resize(n, 0.0);
+
+    // Every slot is overwritten during sampling; this is just the allocation.
+    let mut fields = vec![
+        SurfaceField {
+            color: [0.0; 3],
+            roughness: 0.0,
+            metallic: 0.0,
+            occlusion: 1.0,
+        };
+        n
+    ];
+    let mut emissive = if emit { vec![0u8; n * 4] } else { Vec::new() };
+
+    // Phase 1 — sample into float fields, retaining shading for the post-pass.
+    let sample_into = |x: usize,
+                       y: usize,
+                       field_slot: &mut SurfaceField,
+                       height_slot: &mut f64,
+                       emissive_px: Option<&mut [u8]>| {
+        let u = x as f64 / w as f64;
+        let v = y as f64 / h as f64;
+        let s = cell.sample(x as u32, y as u32, u, v);
+
+        *height_slot = s.height;
+        *field_slot = SurfaceField::from(&s);
+
+        if let Some(e) = emissive_px {
+            e[0] = linear_to_srgb(s.emissive[0]);
+            e[1] = linear_to_srgb(s.emissive[1]);
+            e[2] = linear_to_srgb(s.emissive[2]);
+            e[3] = 255;
+        }
+    };
+
+    if emit {
+        fields
+            .par_chunks_mut(w)
+            .zip(heights.par_chunks_mut(w))
+            .zip(emissive.par_chunks_mut(w * 4))
+            .enumerate()
+            .for_each(|(y, ((field_row, height_row), emissive_row))| {
+                for (x, (field_slot, height_slot)) in
+                    field_row.iter_mut().zip(height_row.iter_mut()).enumerate()
+                {
+                    let ei = x * 4;
+                    sample_into(
+                        x,
+                        y,
+                        field_slot,
+                        height_slot,
+                        Some(&mut emissive_row[ei..ei + 4]),
+                    );
+                }
+            });
+    } else {
+        fields
+            .par_chunks_mut(w)
+            .zip(heights.par_chunks_mut(w))
+            .enumerate()
+            .for_each(|(y, (field_row, height_row))| {
+                for (x, (field_slot, height_slot)) in
+                    field_row.iter_mut().zip(height_row.iter_mut()).enumerate()
+                {
+                    sample_into(x, y, field_slot, height_slot, None);
+                }
+            });
+    }
+
+    // Phase 2 — age the shading, and the height field the normals come from.
+    crate::weathering::apply(&mut fields, &mut heights, width, height, weathering);
+
+    // Phase 3 — pack the aged fields.
+    let mut albedo = vec![0u8; n * 4];
+    let mut roughness = vec![0u8; n * 4];
+    albedo
+        .par_chunks_mut(w * 4)
+        .zip(roughness.par_chunks_mut(w * 4))
+        .zip(fields.par_chunks(w))
+        .for_each(|((albedo_row, orm_row), field_row)| {
+            for (x, f) in field_row.iter().enumerate() {
+                let ai = x * 4;
+                pack_texel(f, &mut albedo_row[ai..ai + 4], &mut orm_row[ai..ai + 4]);
+            }
+        });
+
+    let normal = height_to_normal(&heights, width, height, normal_strength, BoundaryMode::Wrap);
+
+    if let Some(ws) = workspace {
+        ws.return_grid(heights);
+    }
+
+    Ok(TextureMap {
+        albedo,
+        normal,
+        roughness,
+        width,
+        height,
+        mip_level_count: 1,
+        emissive: if emit { Some(emissive) } else { None },
+    })
+}
+
 fn generate_surface_impl<C: SurfaceCell + Sync>(
     width: u32,
     height: u32,
@@ -176,15 +404,11 @@ fn generate_surface_impl<C: SurfaceCell + Sync>(
         *height_slot = s.height;
 
         let ai = x * 4;
-        albedo_row[ai] = linear_to_srgb(s.color[0]);
-        albedo_row[ai + 1] = linear_to_srgb(s.color[1]);
-        albedo_row[ai + 2] = linear_to_srgb(s.color[2]);
-        albedo_row[ai + 3] = 255;
-
-        orm_row[ai] = (s.occlusion.clamp(0.0, 1.0) * 255.0).round() as u8;
-        orm_row[ai + 1] = (s.roughness.clamp(0.0, 1.0) * 255.0).round() as u8;
-        orm_row[ai + 2] = (s.metallic.clamp(0.0, 1.0) * 255.0).round() as u8;
-        orm_row[ai + 3] = 255;
+        pack_texel(
+            &SurfaceField::from(&s),
+            &mut albedo_row[ai..ai + 4],
+            &mut orm_row[ai..ai + 4],
+        );
 
         if let Some(e) = emissive_px {
             e[0] = linear_to_srgb(s.emissive[0]);
@@ -314,5 +538,119 @@ mod tests {
         assert_eq!(lerp(0.0, 1.0, -1.0), 0.0);
         assert_eq!(lerp(0.0, 1.0, 2.0), 1.0);
         assert_eq!(lerp(0.0, 1.0, 0.5), 0.5);
+    }
+
+    /// A ridged cell, so the weathering masks have convexity and cavity to
+    /// find; a flat surface would age to nothing.
+    struct Ridged;
+
+    impl SurfaceCell for Ridged {
+        fn sample(&self, _x: u32, _y: u32, u: f64, v: f64) -> SurfaceSample {
+            use std::f64::consts::TAU;
+            let height = (TAU * 3.0 * u).sin() * (TAU * 3.0 * v).sin();
+            SurfaceSample {
+                height,
+                color: [0.4, 0.42, 0.45],
+                roughness: 0.6,
+                metallic: 0.0,
+                occlusion: 1.0,
+                emissive: [0.2, 0.0, 0.0],
+            }
+        }
+    }
+
+    fn weathered_config() -> crate::weathering::WeatheringConfig {
+        use crate::weathering::{Corrosion, EdgeWear, WeatheringConfig};
+        WeatheringConfig {
+            seed: 5,
+            edge_wear: EdgeWear {
+                amount: 1.0,
+                ..Default::default()
+            },
+            corrosion: Corrosion {
+                amount: 1.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// A no-op weathering config must take the plain path and produce exactly
+    /// the same bytes — that is what makes it safe to route a generator
+    /// through the weathered driver unconditionally.
+    #[test]
+    fn noop_weathering_matches_the_plain_driver() {
+        let plain = generate_surface(32, 32, 1.0, None, &Ridged).expect("plain");
+        let weathered = generate_surface_weathered(
+            32,
+            32,
+            1.0,
+            None,
+            &Ridged,
+            &crate::weathering::WeatheringConfig::default(),
+        )
+        .expect("weathered");
+
+        assert_eq!(plain.albedo, weathered.albedo, "albedo drifted");
+        assert_eq!(plain.normal, weathered.normal, "normal drifted");
+        assert_eq!(plain.roughness, weathered.roughness, "ORM drifted");
+        assert!(weathered.emissive.is_none());
+    }
+
+    /// Enabled weathering must reach the packed output, and must re-derive
+    /// normals from the aged height field so corrosion crust is lit.
+    #[test]
+    fn weathering_changes_albedo_and_normals() {
+        let plain = generate_surface(48, 48, 1.0, None, &Ridged).expect("plain");
+        let aged = generate_surface_weathered(48, 48, 1.0, None, &Ridged, &weathered_config())
+            .expect("weathered");
+
+        assert_ne!(plain.albedo, aged.albedo, "weathering never reached albedo");
+        assert_ne!(
+            plain.roughness, aged.roughness,
+            "weathering never reached ORM"
+        );
+        assert_ne!(
+            plain.normal, aged.normal,
+            "corrosion relief was not folded into the normal map"
+        );
+        assert_eq!(aged.width, 48);
+        assert_eq!(aged.albedo.len(), 48 * 48 * 4);
+    }
+
+    /// The weathered emissive path collects glow, and weathering leaves that
+    /// glow alone.
+    #[test]
+    fn weathered_emissive_preserves_glow() {
+        let plain = generate_surface_emissive(32, 32, 1.0, None, &Ridged).expect("plain");
+        let aged =
+            generate_surface_weathered_emissive(32, 32, 1.0, None, &Ridged, &weathered_config())
+                .expect("weathered");
+
+        let plain_emissive = plain.emissive.expect("plain emissive");
+        let aged_emissive = aged.emissive.expect("aged emissive");
+        assert_eq!(
+            plain_emissive, aged_emissive,
+            "weathering dimmed the emissive channel"
+        );
+        assert_ne!(plain.albedo, aged.albedo, "weathering never reached albedo");
+    }
+
+    #[test]
+    fn weathered_driver_validates_dimensions_and_reuses_workspace() {
+        assert!(
+            generate_surface_weathered(0, 4, 1.0, None, &Ridged, &weathered_config()).is_err(),
+            "zero width accepted"
+        );
+
+        let mut ws = Workspace::new();
+        let a =
+            generate_surface_weathered(16, 16, 1.0, Some(&mut ws), &Ridged, &weathered_config())
+                .expect("first");
+        let b =
+            generate_surface_weathered(16, 16, 1.0, Some(&mut ws), &Ridged, &weathered_config())
+                .expect("second");
+        assert_eq!(a.albedo, b.albedo, "pooled buffers changed the result");
+        assert_eq!(a.normal, b.normal);
     }
 }

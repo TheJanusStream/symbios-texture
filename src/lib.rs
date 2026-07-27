@@ -79,6 +79,7 @@ pub mod surface;
 pub mod thatch;
 pub mod twig;
 pub mod wainscoting;
+pub mod weathering;
 pub mod window;
 
 pub use broadleaf::{BroadleafConfig, BroadleafGenerator};

@@ -128,6 +128,12 @@ implements [`TextureGenerator`].
 - [`surface`](src/surface.rs) / [`sprite`](src/sprite.rs) — shared drivers
   for the tileable-surface and sprite-atlas families (buffer packing,
   normal derivation, atlas layout).
+- [`weathering`](src/weathering.rs) — optional ageing post-pass applied by
+  `generate_surface_weathered`: edge wear on convex arrises, corrosion
+  blotches grown out of crevices (with their own crust relief), grime
+  settled into recesses and onto upward-facing lips, and runoff streaks
+  drawn down from ledges. `WeatheringConfig::default()` disables every
+  layer, so embedding it costs nothing until a layer is turned up.
 - [`normal`](src/normal.rs) — heightmap → tangent-space normal map.
 - [`genetics`](src/genetics.rs) — `Genotype` impls for all configs.
 - [`fingerprint`](src/fingerprint.rs) — stable structural hashing of
