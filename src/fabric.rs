@@ -18,12 +18,59 @@ use crate::{
     surface::{SurfaceCell, SurfaceSample, generate_surface},
 };
 
+/// How the warp and weft interlace.
+///
+/// A weave is decided entirely by *which family lies on top at each
+/// crossing*, so the whole family of cloths comes from one predicate over the
+/// thread indices.  Longer floats (satin) catch more light and read as
+/// sheen; diagonal float runs (twill) read as denim or tweed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum WeaveKind {
+    /// One over, one under — calico, canvas, the default cloth.
+    #[default]
+    Plain,
+    /// Floats stepped one thread per row, giving the diagonal wale of denim
+    /// and tweed.
+    Twill,
+    /// Long warp floats broken by a scattered binding point: the smooth,
+    /// lustrous face of satin and sateen.
+    Satin,
+    /// Plain weave worked in pairs, for the chunky look of basketweave and
+    /// hopsack.
+    Basket,
+}
+
+impl WeaveKind {
+    /// Whether the warp (vertical) thread lies over the weft at crossing
+    /// `(i, j)`.
+    #[inline]
+    fn warp_over(self, i: i64, j: i64) -> bool {
+        match self {
+            Self::Plain => (i + j).rem_euclid(2) == 0,
+            // Two over, two under, stepping one thread per row.
+            Self::Twill => (i - j).rem_euclid(4) < 2,
+            // Five-harness: warp floats over four of every five crossings,
+            // with the binding point shifted two threads per row so the
+            // tie-downs never line up into a visible wale.
+            Self::Satin => (i - j * 2).rem_euclid(5) != 0,
+            // Plain, but on pairs of threads.
+            Self::Basket => (i.div_euclid(2) + j.div_euclid(2)).rem_euclid(2) == 0,
+        }
+    }
+}
+
 /// Configures the appearance of a [`FabricGenerator`].
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FabricConfig {
     /// PRNG seed for the deterministic noise pattern; different seeds give
     /// statistically-different textures from otherwise-identical configs.
     pub seed: u32,
+    /// How the warp and weft interlace.
+    ///
+    /// Defaults to [`WeaveKind::Plain`], which is the cloth this generator
+    /// wove before the other patterns existed.
+    #[serde(default)]
+    pub weave: WeaveKind,
     /// Threads per tile edge, clamped to `[2, 128]` and rounded to an
     /// integer so the weave tiles exactly.
     pub thread_count: f64,
@@ -50,6 +97,7 @@ impl Default for FabricConfig {
     fn default() -> Self {
         Self {
             seed: 29,
+            weave: WeaveKind::Plain,
             thread_count: 24.0,
             thread_width: 0.85,
             weave_contrast: 0.6,
@@ -172,11 +220,11 @@ impl SurfaceCell for FabricCell<'_> {
         let warp_p = profile(fu); // vertical threads
         let weft_p = profile(fv); // horizontal threads
 
-        // Plain weave: crossing parity decides the top thread; the
-        // under-thread is pressed down by the weave contrast.
+        // The weave decides the top thread at this crossing; the under-thread
+        // is pressed down by the weave contrast.
         let contrast = c.weave_contrast.clamp(0.0, 1.0);
         let under = 1.0 - 0.4 * contrast;
-        let (warp_lift, weft_lift) = if (i + j).rem_euclid(2) == 0 {
+        let (warp_lift, weft_lift) = if c.weave.warp_over(i, j) {
             (under, 1.0)
         } else {
             (1.0, under)
@@ -275,5 +323,93 @@ mod tests {
             }
         }
         assert!(saw_red && saw_blue, "both thread families must be visible");
+    }
+
+    /// Plain weave is the cloth this generator produced before the other
+    /// patterns existed, so the default must not have moved.
+    #[test]
+    fn plain_weave_is_the_default() {
+        assert_eq!(FabricConfig::default().weave, WeaveKind::Plain);
+    }
+
+    /// Every weave must produce a genuinely different cloth.
+    #[test]
+    fn weaves_are_distinct() {
+        let bake = |weave| {
+            FabricGenerator::new(FabricConfig {
+                weave,
+                ..Default::default()
+            })
+            .generate(64, 64)
+            .expect("generate")
+            .albedo
+        };
+        let kinds = [
+            WeaveKind::Plain,
+            WeaveKind::Twill,
+            WeaveKind::Satin,
+            WeaveKind::Basket,
+        ];
+        for (a, b) in kinds.iter().zip(kinds.iter().skip(1)) {
+            assert_ne!(bake(*a), bake(*b), "{a:?} and {b:?} wove the same cloth");
+        }
+    }
+
+    /// Satin floats over four crossings in five; that long float is the
+    /// entire reason the cloth reads as lustrous rather than as calico.
+    #[test]
+    fn satin_floats_more_than_it_binds() {
+        let over = |weave: WeaveKind| {
+            (0..40)
+                .flat_map(|i| (0..40).map(move |j| (i, j)))
+                .filter(|(i, j)| weave.warp_over(*i, *j))
+                .count() as f64
+                / (40.0 * 40.0)
+        };
+        assert!(
+            (over(WeaveKind::Plain) - 0.5).abs() < 0.02,
+            "plain weave is not balanced"
+        );
+        assert!(
+            over(WeaveKind::Satin) > 0.7,
+            "satin did not float: {:.2}",
+            over(WeaveKind::Satin)
+        );
+    }
+
+    /// Twill's defining feature is the diagonal wale: the float pattern
+    /// repeats along the diagonal rather than the axes.
+    #[test]
+    fn twill_runs_on_the_diagonal() {
+        let weave = WeaveKind::Twill;
+        for i in 0..12 {
+            for j in 0..12 {
+                assert_eq!(
+                    weave.warp_over(i, j),
+                    weave.warp_over(i + 1, j + 1),
+                    "twill did not repeat along the diagonal at ({i}, {j})"
+                );
+            }
+        }
+    }
+
+    /// Basket weave works in pairs, so neighbouring threads share a float.
+    #[test]
+    fn basket_weave_works_in_pairs() {
+        let weave = WeaveKind::Basket;
+        for i in (0..12).step_by(2) {
+            for j in (0..12).step_by(2) {
+                assert_eq!(
+                    weave.warp_over(i, j),
+                    weave.warp_over(i + 1, j),
+                    "basket pair split across the warp at ({i}, {j})"
+                );
+                assert_eq!(
+                    weave.warp_over(i, j),
+                    weave.warp_over(i, j + 1),
+                    "basket pair split across the weft at ({i}, {j})"
+                );
+            }
+        }
     }
 }

@@ -59,6 +59,7 @@ use crate::{
     moss::MossConfig,
     needle::NeedleConfig,
     obsidian::ObsidianConfig,
+    parquet::ParquetConfig,
     pavers::PaversConfig,
     petal::PetalConfig,
     plank::PlankConfig,
@@ -77,6 +78,7 @@ use crate::{
     stained_glass::StainedGlassConfig,
     stucco::StuccoConfig,
     thatch::ThatchConfig,
+    truchet::TruchetConfig,
     twig::TwigConfig,
     wainscoting::WainscotingConfig,
     weathering::{Corrosion, CreviceDirt, EdgeWear, Streaks, WeatheringConfig},
@@ -639,8 +641,12 @@ impl_genotype!(MetalConfig {
         crate::metal::MetalStyle::Brushed,
         crate::metal::MetalStyle::StandingSeam,
         crate::metal::MetalStyle::Hammered,
-        crate::metal::MetalStyle::DiamondPlate
+        crate::metal::MetalStyle::DiamondPlate,
+        crate::metal::MetalStyle::Riveted,
+        crate::metal::MetalStyle::Perforated
     ]),
+    rivet_size: f64(0.05, 0.05, 0.9),
+    hole_size: f64(0.05, 0.05, 0.9),
     scale: f64(1.0, 1.0, 16.0),
     seam_count: f64_round(1.0, 1.0, 16.0),
     seam_sharpness: f64(0.5, 0.5, 6.0),
@@ -1059,6 +1065,47 @@ impl_genotype!(SolarPanelConfig {
     normal_strength: f32(0.2, 0.1, 4.0),
 });
 
+impl_genotype!(ParquetConfig {
+    seed: seed,
+    layout: enum_cycle([
+        crate::parquet::ParquetLayout::Herringbone,
+        crate::parquet::ParquetLayout::Basket,
+        crate::parquet::ParquetLayout::Brick
+    ]),
+    scale: f64_round(1.0, 2.0, 32.0),
+    aspect: f64(0.5, 1.0, 12.0),
+    joint_width: f64(0.01, 0.0, 0.3),
+    joint_depth: f64(0.08, 0.0, 1.5),
+    grain_lines: f64_round(1.0, 1.0, 32.0),
+    grain_contrast: f32(0.06, 0.0, 1.0),
+    grain_warp: f64(0.04, 0.0, 1.0),
+    board_variance: f32(0.03, 0.0, 0.5),
+    color_wood: color3(0.06),
+    color_grain: color3(0.05),
+    color_joint: color3(0.04),
+    gloss_roughness: f32(0.06, 0.0, 1.0),
+    weathering: genotype,
+    normal_strength: f32(0.2, 0.1, 5.0),
+});
+
+impl_genotype!(TruchetConfig {
+    seed: seed,
+    scale: f64_round(1.0, 1.0, 32.0),
+    trace_width: f64(0.015, 0.01, 0.45),
+    trace_relief: f64(0.08, 0.0, 1.5),
+    density: f64(0.08, 0.0, 1.0),
+    color_panel: color3(0.04),
+    color_trace: color3(0.06),
+    color_glow: color3(0.07),
+    emissive_intensity: f32(0.2, 0.0, 4.0),
+    panel_roughness: f32(0.06, 0.0, 1.0),
+    trace_roughness: f32(0.06, 0.0, 1.0),
+    trace_metallic: f32(0.08, 0.0, 1.0),
+    mottle_scale: f64(2.0, 2.0, 48.0),
+    weathering: genotype,
+    normal_strength: f32(0.2, 0.1, 5.0),
+});
+
 impl_genotype!(IceConfig {
     seed: seed,
     scale: f64(0.6, 1.0, 8.0),
@@ -1094,6 +1141,12 @@ impl_genotype!(SandConfig {
 
 impl_genotype!(FabricConfig {
     seed: seed,
+    weave: enum_cycle([
+        crate::fabric::WeaveKind::Plain,
+        crate::fabric::WeaveKind::Twill,
+        crate::fabric::WeaveKind::Satin,
+        crate::fabric::WeaveKind::Basket
+    ]),
     thread_count: f64_round(4.0, 8.0, 64.0),
     thread_width: f64(0.08, 0.3, 0.98),
     weave_contrast: f64(0.12, 0.0, 1.0),

@@ -77,6 +77,8 @@ macro_rules! for_each_generator {
             (Obsidian, obsidian, $crate::obsidian::ObsidianConfig, $crate::obsidian::ObsidianGenerator, Surface),
             (Chitin, chitin, $crate::chitin::ChitinConfig, $crate::chitin::ChitinGenerator, Surface),
             (SolarPanel, solar_panel, $crate::solar_panel::SolarPanelConfig, $crate::solar_panel::SolarPanelGenerator, Surface),
+            (Parquet, parquet, $crate::parquet::ParquetConfig, $crate::parquet::ParquetGenerator, Surface),
+            (Truchet, truchet, $crate::truchet::TruchetConfig, $crate::truchet::TruchetGenerator, Surface),
             (SoftDisc, soft_disc, $crate::soft_disc::SoftDiscConfig, $crate::soft_disc::SoftDiscGenerator, Card),
             (Spark, spark, $crate::spark::SparkConfig, $crate::spark::SparkGenerator, Card),
             (Snowflake, snowflake, $crate::snowflake::SnowflakeConfig, $crate::snowflake::SnowflakeGenerator, Card),

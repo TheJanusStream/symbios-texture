@@ -11,7 +11,7 @@ crate, which re-exports this crate wholesale.
 
 ## What you get
 
-- **55 generators** covering building materials (brick, ashlar, plank,
+- **57 generators** covering building materials (brick, ashlar, plank,
   stucco, metal, enamel, …), natural surfaces (rock, ground, sand, snow,
   ice, lava, cracked earth, gravel, …), vegetation (bark, leaf, grass, moss,
   lichen, cactus, forest floor, …), and particle sprites (spark, puff,
@@ -104,11 +104,11 @@ wrapper crate consumes via the `for_each_generator!` macro. Two kinds:
 - **Card** — alpha-masked cutouts (foliage, windows, particles), meant for
   clamp-to-edge samplers; most can bake variant atlases.
 
-- **Surface** (33): ashlar, asphalt, bark, brick, cactus (skin), chitin,
+- **Surface** (35): ashlar, asphalt, bark, brick, cactus (skin), chitin,
   cobblestone, concrete, corrugated, cracked earth, enamel, encaustic,
   fabric, forest floor, gravel, ground, ice, lava, lichen, marble, metal,
-  moss, obsidian, pavers, plank, rock, sand, shingle, snow, solar panel,
-  stucco, thatch, wainscoting
+  moss, obsidian, parquet, pavers, plank, rock, sand, shingle, snow,
+  solar panel, stucco, thatch, truchet, wainscoting
 - **Card** (22): broadleaf, chain link, flame, flower, frond, grass tuft,
   iron grille, leaf, leaf sprite, log end, needle, petal, puff, reed, ring,
   shard, snowflake, soft disc, spark, stained glass, twig, window

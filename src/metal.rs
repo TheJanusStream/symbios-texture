@@ -1,5 +1,5 @@
-//! Metal texture generator — brushed, standing-seam, hammered, or
-//! diamond-plate sheet, with optional rust weathering.
+//! Metal texture generator — brushed, standing-seam, hammered, diamond-plate,
+//! riveted or perforated sheet, with optional rust weathering.
 //!
 //! The algorithm, per [`MetalStyle`]:
 //! 1. **Brushed**: anisotropic FBM — high frequency in U (many scratches),
@@ -10,6 +10,10 @@
 //!    (peened sheet).
 //! 4. **DiamondPlate**: a diamond lattice of raised oblong studs with
 //!    alternating orientation (tread plate).
+//! 5. **Riveted**: a regular grid of dome-headed rivets standing proud of
+//!    the plate (riveted hull and boiler work).
+//! 6. **Perforated**: a grid of punched round holes through the sheet
+//!    (grilles, lockers, vent panels).
 //!
 //! In every style a separate low-frequency FBM drives rust-patch blending:
 //! rust areas receive a warm colour, raised roughness, and reduced metallic
@@ -38,6 +42,24 @@ pub enum MetalStyle {
     /// Classic tread plate: a diamond lattice of raised oblong studs with
     /// alternating orientation.  `scale` sets the stud count across the tile.
     DiamondPlate,
+    /// Plate fastened with dome-headed rivets on a regular grid — the look
+    /// of riveted hull, tank and boiler work.  `scale` sets the rivet count
+    /// across the tile and `rivet_size` their head diameter.
+    Riveted,
+    /// Sheet punched with a grid of round holes, as in speaker grilles,
+    /// lockers and vent panels.  `scale` sets the hole count across the tile
+    /// and `hole_size` their diameter.
+    Perforated,
+}
+
+/// Default rivet head diameter, as a fraction of its grid cell.
+fn default_rivet_size() -> f64 {
+    0.34
+}
+
+/// Default perforation diameter, as a fraction of its grid cell.
+fn default_hole_size() -> f64 {
+    0.45
 }
 
 /// Configures the appearance of a [`MetalGenerator`].
@@ -56,6 +78,12 @@ pub struct MetalConfig {
     pub seam_sharpness: f64,
     /// Anisotropy factor for `Brushed` — higher = longer horizontal scratches.
     pub brush_stretch: f64,
+    /// For `Riveted`: rivet head diameter as a fraction of its grid cell.
+    #[serde(default = "default_rivet_size")]
+    pub rivet_size: f64,
+    /// For `Perforated`: hole diameter as a fraction of its grid cell.
+    #[serde(default = "default_hole_size")]
+    pub hole_size: f64,
     /// Micro-roughness amplitude \[0, 1\].
     pub roughness: f64,
     /// Metallic value for clean (rust-free) areas \[0, 1\].
@@ -79,6 +107,8 @@ impl Default for MetalConfig {
             seam_count: 6.0,
             seam_sharpness: 2.5,
             brush_stretch: 8.0,
+            rivet_size: default_rivet_size(),
+            hole_size: default_hole_size(),
             roughness: 0.25,
             metallic: 0.85,
             rust_level: 0.15,
@@ -160,7 +190,11 @@ impl SurfaceCell for MetalCell<'_> {
                 let nw = (TAU * v).sin() * c.scale * 0.12;
                 self.fbm_scratch.get([nx, ny, nz, nw]) * 0.5 + 0.5
             }
-            MetalStyle::StandingSeam | MetalStyle::Hammered | MetalStyle::DiamondPlate => {
+            MetalStyle::StandingSeam
+            | MetalStyle::Hammered
+            | MetalStyle::DiamondPlate
+            | MetalStyle::Riveted
+            | MetalStyle::Perforated => {
                 let nx = (TAU * u).cos() * c.scale;
                 let ny = (TAU * u).sin() * c.scale;
                 let nz = (TAU * v).cos() * c.scale;
@@ -188,25 +222,48 @@ impl SurfaceCell for MetalCell<'_> {
             MetalStyle::DiamondPlate => {
                 (0.35 + diamond_stud(u, v, c.scale) * 0.5 + h_scratch * 0.3).clamp(0.0, 1.0)
             }
+            MetalStyle::Riveted => {
+                (0.3 + rivet_head(u, v, c.scale, c.rivet_size) * 0.6 + h_scratch * 0.2)
+                    .clamp(0.0, 1.0)
+            }
+            MetalStyle::Perforated => {
+                // Punched through, so the hole floor sits below the sheet.
+                let solid = 1.0 - punched_hole(u, v, c.scale, c.hole_size);
+                (solid * 0.9 + h_scratch * 0.15).clamp(0.0, 1.0)
+            }
         };
 
         // Colour: lerp metal → rust.
-        let color = [
+        let mut color = [
             lerp(c.color_metal[0], c.color_rust[0], rust_blend as f32),
             lerp(c.color_metal[1], c.color_rust[1], rust_blend as f32),
             lerp(c.color_metal[2], c.color_rust[2], rust_blend as f32),
         ];
 
         // ORM: rust raises roughness and kills metallic.
-        let rough = (c.roughness as f32 + rust_blend as f32 * 0.65).clamp(0.0, 1.0);
-        let met = (c.metallic - rust_blend as f32 * 0.80).clamp(0.0, 1.0);
+        let mut rough = (c.roughness as f32 + rust_blend as f32 * 0.65).clamp(0.0, 1.0);
+        let mut met = (c.metallic - rust_blend as f32 * 0.80).clamp(0.0, 1.0);
+        let mut occlusion = 1.0;
+
+        // A punched hole is a hole: relief alone leaves it reading as sheet
+        // metal with a dent, so darken it and drop the specular response to
+        // what is actually behind the panel.
+        if c.style == MetalStyle::Perforated {
+            let hole = punched_hole(u, v, c.scale, c.hole_size) as f32;
+            for channel in &mut color {
+                *channel *= 1.0 - hole * 0.88;
+            }
+            rough = lerp(rough, 0.95, hole);
+            met = lerp(met, 0.0, hole);
+            occlusion = lerp(1.0, 0.15, hole);
+        }
 
         SurfaceSample {
             height: h_val,
             color,
             roughness: rough,
             metallic: met,
-            occlusion: 1.0,
+            occlusion,
             emissive: [0.0, 0.0, 0.0],
         }
     }
@@ -301,6 +358,40 @@ fn dimple_height(u: f64, v: f64, count: f64, seed: u32) -> f64 {
     1.0 - (1.0 - t * t).max(0.0)
 }
 
+/// Dome-headed rivet field: `1` at the crown of a rivet, `0` on the plate
+/// between them.
+///
+/// One rivet per lattice cell on an integer grid, so the pattern tiles.  The
+/// head is a spherical cap rather than a flat disc — a rivet is defined by
+/// the way its dome catches light across the head, which a flat stamp loses.
+fn rivet_head(u: f64, v: f64, count: f64, size: f64) -> f64 {
+    let k = count.round().max(1.0);
+    let radius = (size * 0.5).clamp(0.02, 0.49);
+    let fu = (u * k).fract() - 0.5;
+    let fv = (v * k).fract() - 0.5;
+    let d = (fu * fu + fv * fv).sqrt();
+    if d >= radius {
+        return 0.0;
+    }
+    // Spherical cap: height falls off as the chord, not linearly.
+    (1.0 - (d / radius) * (d / radius)).max(0.0).sqrt()
+}
+
+/// Punched-hole field: `1` inside a hole, `0` on the solid sheet.
+///
+/// One hole per lattice cell on an integer grid, with a short shoulder so the
+/// punched edge catches light instead of aliasing to a hard step.
+fn punched_hole(u: f64, v: f64, count: f64, size: f64) -> f64 {
+    let k = count.round().max(1.0);
+    let radius = (size * 0.5).clamp(0.02, 0.49);
+    let fu = (u * k).fract() - 0.5;
+    let fv = (v * k).fract() - 0.5;
+    let d = (fu * fu + fv * fv).sqrt();
+    let shoulder = radius * 0.25;
+    let t = ((radius - d) / shoulder.max(1e-9)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Diamond-plate stud field: `1` on a raised stud, `0` on the base plate.
 ///
 /// The UV plane is sheared into diagonal lattice coordinates; each lattice
@@ -359,6 +450,8 @@ mod tests {
             MetalStyle::StandingSeam,
             MetalStyle::Hammered,
             MetalStyle::DiamondPlate,
+            MetalStyle::Riveted,
+            MetalStyle::Perforated,
         ] {
             let map = MetalGenerator::new(styled(style))
                 .generate(32, 32)
@@ -372,7 +465,12 @@ mod tests {
         let brushed = MetalGenerator::new(styled(MetalStyle::Brushed))
             .generate(64, 64)
             .expect("generate failed");
-        for style in [MetalStyle::Hammered, MetalStyle::DiamondPlate] {
+        for style in [
+            MetalStyle::Hammered,
+            MetalStyle::DiamondPlate,
+            MetalStyle::Riveted,
+            MetalStyle::Perforated,
+        ] {
             let other = MetalGenerator::new(styled(style.clone()))
                 .generate(64, 64)
                 .expect("generate failed");
@@ -391,5 +489,95 @@ mod tests {
             assert!((diamond_stud(0.0, x, 6.0) - diamond_stud(1.0, x, 6.0)).abs() < 1e-12);
             assert!((diamond_stud(x, 0.0, 6.0) - diamond_stud(x, 1.0, 6.0)).abs() < 1e-12);
         }
+    }
+
+    /// The new styles must not have disturbed the old ones — `Brushed` is
+    /// the default and is golden-hashed downstream.
+    #[test]
+    fn added_styles_leave_the_default_alone() {
+        assert_eq!(MetalConfig::default().style, MetalStyle::Brushed);
+    }
+
+    /// Rivets stand proud of the plate; perforations punch through it.  The
+    /// two must move the height field in opposite directions.
+    #[test]
+    fn rivets_raise_and_perforations_sink() {
+        let styled = |style| MetalConfig {
+            style,
+            rust_level: 0.0,
+            ..Default::default()
+        };
+        let mean_height = |style| {
+            // Read relief out of the normal map's flatness: a plate with
+            // features has more varied normals than a bare one.
+            let map = MetalGenerator::new(styled(style))
+                .generate(128, 128)
+                .expect("generate");
+            map.normal.chunks(4).map(|px| px[2] as f64).sum::<f64>() / (128.0 * 128.0)
+        };
+
+        let flat = mean_height(MetalStyle::Brushed);
+        for style in [MetalStyle::Riveted, MetalStyle::Perforated] {
+            let relief = mean_height(style.clone());
+            assert!(
+                (relief - flat).abs() > 0.5,
+                "{style:?} produced no relief against a brushed plate"
+            );
+        }
+    }
+
+    /// Rivet heads and punched holes must both be a minority of the sheet —
+    /// they are fasteners and vents, not the surface itself.
+    #[test]
+    fn features_are_a_minority_of_the_sheet() {
+        for (style, feature) in [
+            (MetalStyle::Riveted, "rivets"),
+            (MetalStyle::Perforated, "holes"),
+        ] {
+            let map = MetalGenerator::new(MetalConfig {
+                style: style.clone(),
+                rust_level: 0.0,
+                ..Default::default()
+            })
+            .generate(128, 128)
+            .expect("generate");
+            // Count texels whose normal departs noticeably from flat.
+            let sloped = map
+                .normal
+                .chunks(4)
+                .filter(|px| px[0].abs_diff(128) > 20 || px[1].abs_diff(128) > 20)
+                .count() as f64
+                / (128.0 * 128.0);
+            assert!(
+                (0.01..0.75).contains(&sloped),
+                "{feature} covered {sloped:.3} of the sheet"
+            );
+        }
+    }
+
+    /// Feature size has to actually drive the geometry.
+    #[test]
+    fn feature_size_knobs_take_effect() {
+        let bake = |style, rivet_size, hole_size| {
+            MetalGenerator::new(MetalConfig {
+                style,
+                rivet_size,
+                hole_size,
+                ..Default::default()
+            })
+            .generate(64, 64)
+            .expect("generate")
+            .normal
+        };
+        assert_ne!(
+            bake(MetalStyle::Riveted, 0.2, 0.45),
+            bake(MetalStyle::Riveted, 0.6, 0.45),
+            "rivet_size had no effect"
+        );
+        assert_ne!(
+            bake(MetalStyle::Perforated, 0.34, 0.2),
+            bake(MetalStyle::Perforated, 0.34, 0.7),
+            "hole_size had no effect"
+        );
     }
 }
