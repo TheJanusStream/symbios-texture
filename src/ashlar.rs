@@ -15,7 +15,8 @@ use noise::{Fbm, MultiFractal, Perlin};
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, normalize, sample_grid_into},
-    surface::{SurfaceCell, SurfaceSample, generate_surface},
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered},
+    weathering::WeatheringConfig,
 };
 
 /// Configures the appearance of an [`AshlarGenerator`].
@@ -47,6 +48,13 @@ pub struct AshlarConfig {
     pub color_stone: [f32; 3],
     /// Mortar joint colour in linear RGB \[0, 1\].
     pub color_mortar: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -64,6 +72,7 @@ impl Default for AshlarConfig {
             roughness: 0.45,
             color_stone: [0.52, 0.50, 0.47],
             color_mortar: [0.72, 0.70, 0.65],
+            weathering: WeatheringConfig::default(),
             normal_strength: 4.5,
         }
     }
@@ -198,7 +207,14 @@ impl AshlarGenerator {
             bevel_r_uv,
             width: width as usize,
         };
-        let result = generate_surface(width, height, c.normal_strength, ws.as_deref_mut(), &cell);
+        let result = generate_surface_weathered(
+            width,
+            height,
+            c.normal_strength,
+            ws.as_deref_mut(),
+            &cell,
+            &c.weathering,
+        );
 
         if let Some(ws) = ws {
             ws.return_grid(rough_grid);

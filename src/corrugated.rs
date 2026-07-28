@@ -22,7 +22,8 @@ use noise::{Fbm, MultiFractal, Perlin};
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, normalize, sample_grid_into},
-    surface::{SurfaceCell, SurfaceSample, generate_surface, lerp},
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered, lerp},
+    weathering::WeatheringConfig,
 };
 
 /// Configures the appearance of a [`CorrugatedGenerator`].
@@ -45,6 +46,13 @@ pub struct CorrugatedConfig {
     pub color_metal: [f32; 3],
     /// Rust colour in linear RGB.
     pub color_rust: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -60,6 +68,7 @@ impl Default for CorrugatedConfig {
             metallic: 0.85,
             color_metal: [0.72, 0.74, 0.76],
             color_rust: [0.55, 0.30, 0.12],
+            weathering: WeatheringConfig::default(),
             normal_strength: 4.0,
         }
     }
@@ -202,7 +211,14 @@ impl CorrugatedGenerator {
             ridges: c.ridges.round(),
             width: width as usize,
         };
-        let result = generate_surface(width, height, c.normal_strength, ws.as_deref_mut(), &cell);
+        let result = generate_surface_weathered(
+            width,
+            height,
+            c.normal_strength,
+            ws.as_deref_mut(),
+            &cell,
+            &c.weathering,
+        );
 
         if let Some(ws) = ws {
             ws.return_grid(micro_grid);

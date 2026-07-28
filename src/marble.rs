@@ -23,7 +23,8 @@ use noise::{Fbm, MultiFractal, Perlin};
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, bilinear_sample_torus, normalize, sample_grid_into},
-    surface::{SurfaceCell, SurfaceSample, generate_surface, lerp},
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered, lerp},
+    weathering::WeatheringConfig,
 };
 
 /// Serde default for [`MarbleConfig::warp_octaves`] — keeps configs saved
@@ -59,6 +60,13 @@ pub struct MarbleConfig {
     pub color_base: [f32; 3],
     /// Vein colour in linear RGB.
     pub color_vein: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -76,6 +84,7 @@ impl Default for MarbleConfig {
             roughness: 0.08,
             color_base: [0.92, 0.90, 0.87],
             color_vein: [0.42, 0.38, 0.34],
+            weathering: WeatheringConfig::default(),
             normal_strength: 1.5,
         }
     }
@@ -223,7 +232,14 @@ impl MarbleGenerator {
             w,
             h,
         };
-        let result = generate_surface(width, height, c.normal_strength, ws.as_deref_mut(), &cell);
+        let result = generate_surface_weathered(
+            width,
+            height,
+            c.normal_strength,
+            ws.as_deref_mut(),
+            &cell,
+            &c.weathering,
+        );
 
         if let Some(ws) = ws {
             ws.return_grid(base_grid);

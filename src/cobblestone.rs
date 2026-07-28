@@ -15,7 +15,8 @@ use noise::{Fbm, MultiFractal, Perlin};
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, cell_hash, normalize, sample_grid_into, toroidal_voronoi},
-    surface::{SurfaceCell, SurfaceSample, generate_surface},
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered},
+    weathering::WeatheringConfig,
 };
 
 /// Configures the appearance of a [`CobblestoneGenerator`].
@@ -37,6 +38,13 @@ pub struct CobblestoneConfig {
     pub color_stone: [f32; 3],
     /// Mud / dirt gap colour in linear RGB \[0, 1\].
     pub color_mud: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -51,6 +59,7 @@ impl Default for CobblestoneConfig {
             roundness: 1.2,
             color_stone: [0.46, 0.43, 0.40],
             color_mud: [0.22, 0.18, 0.14],
+            weathering: WeatheringConfig::default(),
             normal_strength: 5.0,
         }
     }
@@ -163,7 +172,14 @@ impl CobblestoneGenerator {
             gap_threshold: c.gap_width / scale,
             width: width as usize,
         };
-        let result = generate_surface(width, height, c.normal_strength, ws.as_deref_mut(), &cell);
+        let result = generate_surface_weathered(
+            width,
+            height,
+            c.normal_strength,
+            ws.as_deref_mut(),
+            &cell,
+            &c.weathering,
+        );
 
         if let Some(ws) = ws {
             ws.return_grid(surf_grid);

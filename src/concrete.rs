@@ -13,7 +13,8 @@ use noise::{Fbm, MultiFractal, Perlin};
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, normalize, sample_grid_into},
-    surface::{SurfaceCell, SurfaceSample, generate_surface, lerp},
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered, lerp},
+    weathering::WeatheringConfig,
 };
 
 /// Configures the appearance of a [`ConcreteGenerator`].
@@ -38,6 +39,13 @@ pub struct ConcreteConfig {
     pub color_base: [f32; 3],
     /// Pit / shadow colour in linear RGB \[0, 1\].
     pub color_pit: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -54,6 +62,7 @@ impl Default for ConcreteConfig {
             pit_density: 0.08,
             color_base: [0.55, 0.54, 0.52],
             color_pit: [0.35, 0.34, 0.33],
+            weathering: WeatheringConfig::default(),
             normal_strength: 2.5,
         }
     }
@@ -172,12 +181,13 @@ impl ConcreteGenerator {
             pits: &pits,
             width: width as usize,
         };
-        let result = generate_surface(
+        let result = generate_surface_weathered(
             width,
             height,
             self.config.normal_strength,
             ws.as_deref_mut(),
             &cell,
+            &self.config.weathering,
         );
 
         if let Some(ws) = ws {

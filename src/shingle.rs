@@ -15,7 +15,8 @@ use noise::{Fbm, MultiFractal, Perlin};
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, normalize, sample_grid_into},
-    surface::{SurfaceCell, SurfaceSample, generate_surface, lerp},
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered, lerp},
+    weathering::WeatheringConfig,
 };
 
 /// Configures the appearance of a [`ShingleGenerator`].
@@ -40,6 +41,13 @@ pub struct ShingleConfig {
     pub color_tile: [f32; 3],
     /// Shadow / grout colour between rows in linear RGB \[0, 1\].
     pub color_grout: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.  Higher values exaggerate the overlap step.
     pub normal_strength: f32,
 }
@@ -55,6 +63,7 @@ impl Default for ShingleConfig {
             moss_level: 0.18,
             color_tile: [0.40, 0.25, 0.18],
             color_grout: [0.18, 0.14, 0.12],
+            weathering: WeatheringConfig::default(),
             normal_strength: 5.0,
         }
     }
@@ -210,7 +219,14 @@ impl ShingleGenerator {
             exposed: (1.0 - c.overlap).clamp(0.05, 1.0),
             width: width as usize,
         };
-        let result = generate_surface(width, height, c.normal_strength, ws.as_deref_mut(), &cell);
+        let result = generate_surface_weathered(
+            width,
+            height,
+            c.normal_strength,
+            ws.as_deref_mut(),
+            &cell,
+            &c.weathering,
+        );
 
         if let Some(ws) = ws {
             ws.return_grid(surf_grid);

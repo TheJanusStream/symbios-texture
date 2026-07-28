@@ -26,7 +26,8 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, normalize, sample_grid_into},
-    surface::{SurfaceCell, SurfaceSample, generate_surface, lerp},
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered, lerp},
+    weathering::WeatheringConfig,
 };
 
 /// Visual style of the metal surface.
@@ -94,6 +95,13 @@ pub struct MetalConfig {
     pub color_metal: [f32; 3],
     /// Rust colour in linear RGB \[0, 1\].
     pub color_rust: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -114,6 +122,7 @@ impl Default for MetalConfig {
             rust_level: 0.15,
             color_metal: [0.42, 0.44, 0.47],
             color_rust: [0.42, 0.24, 0.12],
+            weathering: WeatheringConfig::default(),
             normal_strength: 3.0,
         }
     }
@@ -288,12 +297,13 @@ impl MetalGenerator {
             rust_grid: &rust_grid,
             width: width as usize,
         };
-        let result = generate_surface(
+        let result = generate_surface_weathered(
             width,
             height,
             self.config.normal_strength,
             ws.as_deref_mut(),
             &cell,
+            &self.config.weathering,
         );
 
         if let Some(ws) = ws {

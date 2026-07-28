@@ -19,7 +19,8 @@ use noise::{Fbm, MultiFractal, Perlin};
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, normalize, sample_grid_into},
-    surface::{SurfaceCell, SurfaceSample, generate_surface, lerp},
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered, lerp},
+    weathering::WeatheringConfig,
 };
 
 /// Configures the appearance of a [`ThatchGenerator`].
@@ -50,6 +51,13 @@ pub struct ThatchConfig {
     pub color_straw: [f32; 3],
     /// Shadow / rot colour at the bottom of each bundle \[0, 1\].
     pub color_shadow: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -65,6 +73,7 @@ impl Default for ThatchConfig {
             layer_shadow: 0.55,
             color_straw: [0.62, 0.54, 0.28],
             color_shadow: [0.22, 0.17, 0.09],
+            weathering: WeatheringConfig::default(),
             normal_strength: 3.5,
         }
     }
@@ -144,7 +153,14 @@ impl ThatchGenerator {
             layer_count: c.layer_count.round().max(1.0),
             width: width as usize,
         };
-        let result = generate_surface(width, height, c.normal_strength, ws.as_deref_mut(), &cell);
+        let result = generate_surface_weathered(
+            width,
+            height,
+            c.normal_strength,
+            ws.as_deref_mut(),
+            &cell,
+            &c.weathering,
+        );
 
         // Return grid buffers to the workspace for reuse.
         if let Some(ws) = ws {

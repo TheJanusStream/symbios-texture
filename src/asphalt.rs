@@ -20,7 +20,8 @@ use noise::{Fbm, MultiFractal, Perlin};
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, normalize, sample_grid_into},
-    surface::{SurfaceCell, SurfaceSample, generate_surface, lerp},
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered, lerp},
+    weathering::WeatheringConfig,
 };
 
 /// Configures the appearance of an [`AsphaltGenerator`].
@@ -43,6 +44,13 @@ pub struct AsphaltConfig {
     pub color_base: [f32; 3],
     /// Aggregate stone fleck colour in linear RGB.
     pub color_aggregate: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -58,6 +66,7 @@ impl Default for AsphaltConfig {
             stain_level: 0.25,
             color_base: [0.06, 0.06, 0.07],
             color_aggregate: [0.35, 0.33, 0.30],
+            weathering: WeatheringConfig::default(),
             normal_strength: 2.5,
         }
     }
@@ -190,7 +199,14 @@ impl AsphaltGenerator {
             agg_threshold: 1.0 - c.aggregate_density.clamp(0.01, 0.99),
             width: width as usize,
         };
-        let result = generate_surface(width, height, c.normal_strength, ws.as_deref_mut(), &cell);
+        let result = generate_surface_weathered(
+            width,
+            height,
+            c.normal_strength,
+            ws.as_deref_mut(),
+            &cell,
+            &c.weathering,
+        );
 
         if let Some(ws) = ws {
             ws.return_grid(macro_grid);

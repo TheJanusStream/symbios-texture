@@ -9,7 +9,8 @@ use noise::{Fbm, MultiFractal, Perlin};
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, normalize, sample_grid_into},
-    surface::{SurfaceCell, SurfaceSample, generate_surface, lerp},
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered, lerp},
+    weathering::WeatheringConfig,
 };
 
 /// Configures the appearance of a [`StuccoGenerator`].
@@ -28,6 +29,13 @@ pub struct StuccoConfig {
     pub color_base: [f32; 3],
     /// Shadow / recessed-area colour in linear RGB \[0, 1\].
     pub color_shadow: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -41,6 +49,7 @@ impl Default for StuccoConfig {
             roughness: 0.35,
             color_base: [0.92, 0.89, 0.84],
             color_shadow: [0.72, 0.70, 0.66],
+            weathering: WeatheringConfig::default(),
             normal_strength: 2.0,
         }
     }
@@ -121,12 +130,13 @@ impl StuccoGenerator {
             grid: &grid,
             width: width as usize,
         };
-        let result = generate_surface(
+        let result = generate_surface_weathered(
             width,
             height,
             self.config.normal_strength * 0.5,
             ws.as_deref_mut(),
             &cell,
+            &self.config.weathering,
         );
 
         if let Some(ws) = ws {

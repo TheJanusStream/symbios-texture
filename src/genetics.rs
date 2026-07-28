@@ -547,6 +547,7 @@ impl_genotype!(BrickConfig {
     roughness: f64(0.1, 0.0, 1.0),
     color_brick: color3(0.07),
     color_mortar: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 8.0),
 }
 post_mutate: |s| {
@@ -597,6 +598,7 @@ impl_genotype!(ShingleConfig {
     moss_level: f64(0.1, 0.0, 1.0),
     color_tile: color3(0.07),
     color_grout: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 8.0),
 }
 post_mutate: |s| {
@@ -619,6 +621,7 @@ impl_genotype!(StuccoConfig {
     roughness: f64(0.1, 0.0, 1.0),
     color_base: color3(0.07),
     color_shadow: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 6.0),
 });
 
@@ -632,6 +635,7 @@ impl_genotype!(ConcreteConfig {
     pit_density: f64(0.04, 0.0, 0.45),
     color_base: color3(0.07),
     color_pit: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 6.0),
 });
 
@@ -656,6 +660,7 @@ impl_genotype!(MetalConfig {
     rust_level: f64(0.1, 0.0, 1.0),
     color_metal: color3(0.07),
     color_rust: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 6.0),
 });
 
@@ -673,6 +678,7 @@ impl_genotype!(PaversConfig {
     roughness: f64(0.1, 0.0, 1.0),
     color_stone: color3(0.07),
     color_grout: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 8.0),
 });
 
@@ -687,6 +693,7 @@ impl_genotype!(AshlarConfig {
     roughness: f64(0.1, 0.0, 1.0),
     color_stone: color3(0.07),
     color_mortar: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 8.0),
 });
 
@@ -698,6 +705,7 @@ impl_genotype!(CobblestoneConfig {
     roundness: f64(0.15, 0.3, 2.5),
     color_stone: color3(0.07),
     color_mud: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 8.0),
 });
 
@@ -710,6 +718,7 @@ impl_genotype!(ThatchConfig {
     layer_shadow: f64(0.1, 0.0, 1.0),
     color_straw: color3(0.07),
     color_shadow: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 6.0),
 });
 
@@ -724,6 +733,7 @@ impl_genotype!(MarbleConfig {
     roughness: f64(0.05, 0.0, 0.4),
     color_base: color3(0.07),
     color_vein: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.3, 0.0, 4.0),
 });
 
@@ -736,6 +746,7 @@ impl_genotype!(CorrugatedConfig {
     metallic: f32(0.1, 0.0, 1.0),
     color_metal: color3(0.07),
     color_rust: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 6.0),
 });
 
@@ -748,6 +759,7 @@ impl_genotype!(AsphaltConfig {
     stain_level: f64(0.1, 0.0, 1.0),
     color_base: color3(0.05),
     color_aggregate: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.3, 0.0, 4.0),
 });
 
@@ -761,6 +773,7 @@ impl_genotype!(WainscotingConfig {
     grain_warp: f64(0.1, 0.0, 1.0),
     color_wood_light: color3(0.07),
     color_wood_dark: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 8.0),
 });
 
@@ -799,6 +812,7 @@ impl_genotype!(EncausticConfig {
     color_a: color3(0.07),
     color_b: color3(0.07),
     color_grout: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.5, 0.5, 6.0),
 });
 
@@ -1153,6 +1167,7 @@ impl_genotype!(FabricConfig {
     fuzz: f64(0.1, 0.0, 1.0),
     color_warp: color3(0.07),
     color_weft: color3(0.07),
+    weathering: genotype,
     normal_strength: f32(0.4, 0.5, 6.0),
 });
 

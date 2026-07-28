@@ -15,7 +15,8 @@ use noise::{Fbm, MultiFractal, Perlin};
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, normalize, sample_grid_into},
-    surface::{SurfaceCell, SurfaceSample, generate_surface},
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered},
+    weathering::WeatheringConfig,
 };
 
 /// How the warp and weft interlace.
@@ -89,6 +90,13 @@ pub struct FabricConfig {
     /// Weft (horizontal) thread colour in linear RGB \[0, 1\].  Match the
     /// warp colour for solid cloth, contrast it for shot/two-tone weaves.
     pub color_weft: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -104,6 +112,7 @@ impl Default for FabricConfig {
             fuzz: 0.35,
             color_warp: [0.55, 0.36, 0.24],
             color_weft: [0.62, 0.44, 0.30],
+            weathering: WeatheringConfig::default(),
             normal_strength: 3.0,
         }
     }
@@ -160,7 +169,14 @@ impl FabricGenerator {
             threads: c.thread_count.round().clamp(2.0, 128.0),
             width: width as usize,
         };
-        let result = generate_surface(width, height, c.normal_strength, ws.as_deref_mut(), &cell);
+        let result = generate_surface_weathered(
+            width,
+            height,
+            c.normal_strength,
+            ws.as_deref_mut(),
+            &cell,
+            &c.weathering,
+        );
 
         if let Some(ws) = ws {
             ws.return_grid(fuzz_grid);

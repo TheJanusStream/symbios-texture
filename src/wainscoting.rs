@@ -19,7 +19,8 @@ use noise::{Fbm, MultiFractal, Perlin};
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, bilinear_sample_torus, normalize, sample_grid_into},
-    surface::{SurfaceCell, SurfaceSample, generate_surface, lerp},
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered, lerp},
+    weathering::WeatheringConfig,
 };
 
 /// Configures the appearance of a [`WainscotingGenerator`].
@@ -44,6 +45,13 @@ pub struct WainscotingConfig {
     pub color_wood_light: [f32; 3],
     /// Dark grain colour in linear RGB \[0, 1\].
     pub color_wood_dark: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -60,6 +68,7 @@ impl Default for WainscotingConfig {
             grain_warp: 0.30,
             color_wood_light: [0.65, 0.44, 0.20],
             color_wood_dark: [0.28, 0.16, 0.07],
+            weathering: WeatheringConfig::default(),
             normal_strength: 4.0,
         }
     }
@@ -201,7 +210,14 @@ impl WainscotingGenerator {
             w: width as usize,
             h: height as usize,
         };
-        let result = generate_surface(width, height, c.normal_strength, ws.as_deref_mut(), &cell);
+        let result = generate_surface_weathered(
+            width,
+            height,
+            c.normal_strength,
+            ws.as_deref_mut(),
+            &cell,
+            &c.weathering,
+        );
 
         if let Some(ws) = ws {
             ws.return_grid(grain_grid);
