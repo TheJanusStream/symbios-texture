@@ -132,8 +132,19 @@ impl ShardCell {
             };
             let th = if theta < a0 { theta + TAU } else { theta };
             if th >= a0 && th <= a1 {
+                // The edge between two vertices is a straight chord, whose
+                // polar form is *not* a linear ramp in r. Interpolating the
+                // radius directly traces an arc, which at zero irregularity
+                // collapses to a circle and makes `sides` inert. Intersect
+                // the ray with the chord instead.
+                let r0 = self.radii[i];
+                let denom = r0 * (th - a0).sin() + r1 * (a1 - th).sin();
+                if denom.abs() > 1e-9 {
+                    return r0 * r1 * (a1 - a0).sin() / denom;
+                }
+                // Degenerate vertex pair (coincident angles): fail soft.
                 let t = if a1 > a0 { (th - a0) / (a1 - a0) } else { 0.0 };
-                return self.radii[i] + (r1 - self.radii[i]) * t;
+                return r0 + (r1 - r0) * t;
             }
         }
         // Unreachable for a well-formed table; fail soft.
@@ -286,6 +297,28 @@ mod tests {
         // All radii equal for a regular polygon.
         for i in 1..cell.sides {
             assert!((cell.radii[i] - cell.radii[0]).abs() < 1e-12);
+        }
+
+        // Equal radii alone are also satisfied by a circle, which is exactly
+        // what the old radius-lerp produced. The silhouette is only a polygon
+        // if points sampled *along* an edge are collinear, so sample between
+        // two adjacent vertices and check they stay on the chord.
+        let (a0, a1) = (cell.angles[0], cell.angles[1]);
+        let polar = |theta: f64| {
+            let r = cell.boundary(theta);
+            (r * theta.cos(), r * theta.sin())
+        };
+        let p0 = polar(a0);
+        let p1 = polar(a1);
+        for step in 1..8 {
+            let theta = a0 + (a1 - a0) * f64::from(step) / 8.0;
+            let p = polar(theta);
+            // Twice the triangle area — zero exactly when p lies on p0->p1.
+            let cross = (p1.0 - p0.0) * (p.1 - p0.1) - (p1.1 - p0.1) * (p.0 - p0.0);
+            assert!(
+                cross.abs() < 1e-12,
+                "edge sample at {theta} bows off the chord by {cross}"
+            );
         }
     }
 
