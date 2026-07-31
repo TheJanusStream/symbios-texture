@@ -184,7 +184,10 @@ impl PaversGenerator {
             bevel_r,
             hx: (0.5 - grout_half - bevel_r).max(0.0),
             hy: (0.5 - grout_half - bevel_r).max(0.0),
-            cols: (c.scale * c.aspect_ratio).round(),
+            // At least one column, for the same reason as `brick`: a small
+            // enough `aspect_ratio` would round the count to zero and flatten
+            // every row into a single constant sample.
+            cols: (c.scale * c.aspect_ratio).round().max(1.0),
             rows: c.scale.round(),
             width: width as usize,
         };

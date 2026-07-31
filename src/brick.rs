@@ -32,6 +32,12 @@ pub struct BrickConfig {
     /// `0.0` = stack bond, `0.5` = running bond, `0.333` = third bond.
     pub row_offset: f64,
     /// Brick width-to-height ratio (e.g. `2.0` = standard 2:1 brick).
+    ///
+    /// Values below `1.0` give bricks taller than they are wide — soldier
+    /// courses, on-end tiles, narrow vertical cladding.  The derived column
+    /// count is `round(scale × aspect_ratio)`, floored at one column, so a
+    /// very small ratio bottoms out at a single brick per row rather than
+    /// collapsing the grid.
     pub aspect_ratio: f64,
     /// Mortar gap as a fraction of cell height \[0, 0.4\].
     pub mortar_size: f64,
@@ -201,7 +207,10 @@ impl BrickGenerator {
             hx: (0.5 - c.mortar_size - bevel_r).max(0.0),
             hy: (0.5 - c.mortar_size - bevel_r).max(0.0),
             scale,
-            cols: (scale * c.aspect_ratio).round(),
+            // At least one column: an `aspect_ratio` small enough that
+            // `scale × aspect_ratio` rounds to zero would otherwise flatten
+            // every row into a single constant sample.
+            cols: (scale * c.aspect_ratio).round().max(1.0),
             width: width as usize,
         };
         let result = generate_surface_weathered(
@@ -247,4 +256,82 @@ fn cell_hash(bx: i64, by: i64, seed: u32) -> f64 {
     h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
     h ^= h >> 33;
     (h as f64) * (1.0 / u64::MAX as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every config below lays four courses, so `v = 0.125` is the middle of
+    /// the bottom one. Sampling a course *centre* matters: the boundaries at
+    /// `v = 0.25 · n` — including the exact midpoint — are solid mortar, and
+    /// read as flat no matter how the bond is laid.
+    const COURSE_CENTRE_V: f64 = 0.125;
+
+    /// Index of the first byte of the scanline through a course centre.
+    fn course_centre_row(width: u32, height: u32) -> usize {
+        (height as f64 * COURSE_CENTRE_V) as usize * width as usize * 4
+    }
+
+    /// Number of distinct albedo values along that scanline — a proxy for
+    /// "the bond has columns", since mortar joints are the only thing that
+    /// varies a row horizontally.
+    fn horizontal_variety(map: &TextureMap, width: u32, height: u32) -> usize {
+        let row = course_centre_row(width, height);
+        (0..width as usize)
+            .map(|x| map.albedo[row + x * 4])
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    }
+
+    #[test]
+    fn sub_unit_aspect_ratio_keeps_a_bond() {
+        // scale × aspect_ratio = 0.4, which rounds to zero columns. Floored
+        // at one, the row still carries a mortar joint at each edge; without
+        // the floor `u` drops out of the cell coordinate and the scanline
+        // flattens to a single value.
+        let cfg = BrickConfig {
+            scale: 4.0,
+            aspect_ratio: 0.1,
+            roughness: 0.0,
+            cell_variance: 0.0,
+            ..Default::default()
+        };
+        let map = BrickGenerator::new(cfg).generate(64, 64).expect("generate");
+        assert!(
+            horizontal_variety(&map, 64, 64) > 1,
+            "a sub-unit aspect ratio should still lay one brick per row, not a flat field",
+        );
+    }
+
+    #[test]
+    fn aspect_ratio_drives_the_column_count() {
+        // Tall bricks pack fewer joints across a row than wide ones, so the
+        // wide config must not read as narrower than the tall one.
+        let bake = |aspect_ratio| {
+            let cfg = BrickConfig {
+                scale: 4.0,
+                aspect_ratio,
+                roughness: 0.0,
+                cell_variance: 0.0,
+                ..Default::default()
+            };
+            let map = BrickGenerator::new(cfg)
+                .generate(128, 128)
+                .expect("generate");
+            // Count mortar runs: transitions into the light mortar colour.
+            let row = course_centre_row(128, 128);
+            (1..128)
+                .filter(|x| {
+                    let prev = map.albedo[row + (x - 1) * 4];
+                    let cur = map.albedo[row + x * 4];
+                    cur > prev + 8
+                })
+                .count()
+        };
+        assert!(
+            bake(0.5) < bake(3.0),
+            "0.5 should read as taller/narrower bricks than 3.0",
+        );
+    }
 }

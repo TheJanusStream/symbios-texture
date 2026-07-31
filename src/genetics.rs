@@ -540,7 +540,7 @@ impl_genotype!(BrickConfig {
     seed: seed,
     scale: f64_round(1.0, 1.0, 12.0),
     row_offset: f64(0.1, 0.0, 1.0),
-    aspect_ratio: f64(0.3, 1.0, 4.0),
+    aspect_ratio: f64(0.3, 0.1, 4.0),
     mortar_size: f64(0.03, 0.01, 0.35),
     bevel: f64(0.2, 0.0, 1.0),
     cell_variance: f64(0.1, 0.0, 0.8),
