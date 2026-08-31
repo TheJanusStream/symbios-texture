@@ -135,7 +135,20 @@ impl SurfaceCell for BrickCell<'_> {
         let v_frac = v_scaled.fract();
 
         let u_shifted = u * self.cols + row_id * c.row_offset;
-        let brick_id_u = u_shifted.floor() as i64;
+        // The bond shift pushes the column index out of `[0, cols)`: at `u = 0`
+        // the index is `floor(row_id × row_offset)` and at `u → 1` it is that
+        // plus `cols`.  A brick straddling the U seam therefore has two indices
+        // — one on each side — and hashing them raw gives it two colours with a
+        // hard vertical join down the tile edge (overlands #968 photographed
+        // it).  Wrapping into `[0, cols)` makes the two halves agree, and it is
+        // exact rather than approximate because `cols` is an integer by
+        // construction (see `generate_inner`).
+        //
+        // `brick_id_v` needs no wrap: rows are integral too, so a course never
+        // straddles the V seam.  What the V seam *does* need is the bond to
+        // line up across it, which is a constraint on the caller's numbers
+        // rather than something the hash can repair — see [`BrickConfig`].
+        let brick_id_u = (u_shifted.floor() as i64).rem_euclid(self.cols as i64);
         let brick_id_v = row_id as i64;
         let u_frac = u_shifted.fract();
 
@@ -282,6 +295,119 @@ mod tests {
             .map(|x| map.albedo[row + x * 4])
             .collect::<std::collections::HashSet<_>>()
             .len()
+    }
+
+    /// Albedo triple at one texel.
+    fn albedo_at(map: &TextureMap, width: u32, x: usize, y: usize) -> [u8; 3] {
+        let i = (y * width as usize + x) * 4;
+        [map.albedo[i], map.albedo[i + 1], map.albedo[i + 2]]
+    }
+
+    /// The scanline through the centre of course `row`, as albedo reds.
+    fn course_scanline(map: &TextureMap, width: u32, height: u32, scale: f64, row: u32) -> Vec<u8> {
+        let v = (row as f64 + 0.5) / scale;
+        let y = (height as f64 * v) as usize;
+        (0..width as usize)
+            .map(|x| albedo_at(map, width, x, y)[0])
+            .collect()
+    }
+
+    /// The lateral offset, in texels, that best aligns `b` onto `a` — i.e. how
+    /// far the bond stepped sideways between two courses.  Searched over one
+    /// brick width, since the pattern repeats at that period.
+    fn best_shift(a: &[u8], b: &[u8], period: usize) -> usize {
+        let w = a.len();
+        (0..period)
+            .min_by_key(|s| {
+                (0..w)
+                    .map(|x| a[x].abs_diff(b[(x + s) % w]) as u64)
+                    .sum::<u64>()
+            })
+            .expect("period is non-zero")
+    }
+
+    /// A brick that straddles the U seam must be one colour, not two.
+    ///
+    /// The sequence: `scale = 4, aspect_ratio = 2` lays eight columns, and
+    /// `row_offset = 0.5` shifts every odd course by half a brick, so the
+    /// brick on course 1 is cut in half by `u = 0` — its right half renders at
+    /// the left edge of the tile and its left half at the right edge.  Before
+    /// the wrap those two halves hashed as column 0 and column 8 and drew two
+    /// different colours; the tile then showed a hard vertical join down its
+    /// own edge wherever it was applied (overlands #968).
+    ///
+    /// Course 0 is deliberately *not* sampled: it is unshifted, so `u = 0`
+    /// lands on a mortar joint there and the two edges match whatever the hash
+    /// does.  Only a staggered course can catch this.
+    #[test]
+    fn a_brick_straddling_the_u_seam_is_one_colour() {
+        let cfg = BrickConfig {
+            scale: 4.0,
+            aspect_ratio: 2.0,
+            row_offset: 0.5,
+            // The surface FBM is toroidal but not identical one texel either
+            // side of the seam, and it would mask the comparison; the bug is
+            // in the per-cell hash, so isolate that.
+            roughness: 0.0,
+            cell_variance: 0.5,
+            ..Default::default()
+        };
+        let (w, h) = (256, 256);
+        let map = BrickGenerator::new(cfg).generate(w, h).expect("generate");
+        let y = (h as f64 * 0.375) as usize; // centre of course 1, the staggered one
+        let left = albedo_at(&map, w, 0, y);
+        let right = albedo_at(&map, w, w as usize - 1, y);
+        assert_eq!(
+            left, right,
+            "the two halves of the seam-straddling brick drew different colours",
+        );
+    }
+
+    /// The bond only continues across the V seam when `scale × row_offset` is
+    /// an integer, which [`BrickConfig`] documents as a constraint on the
+    /// caller.  This pins that documentation to a measurement, because the
+    /// failure is silent: nothing rejects a bad pair, and the tile looks fine
+    /// on its own — the mis-step only appears once it is laid twice vertically.
+    ///
+    /// Measured as a step rather than an absolute offset: every interior pair
+    /// of courses steps sideways by the same amount, so the seam pair must
+    /// step by that same amount too.  `scale = 5, row_offset = 0.4` gives a
+    /// product of 2 and holds; `row_offset = 0.5` gives 2.5 and jumps.
+    #[test]
+    fn the_v_seam_bond_needs_an_integral_scale_row_offset_product() {
+        let (w, h) = (640, 640);
+        let scale = 5.0;
+        let step = |row_offset: f64| {
+            let cfg = BrickConfig {
+                scale,
+                aspect_ratio: 2.0,
+                row_offset,
+                roughness: 0.0,
+                cell_variance: 0.0,
+                ..Default::default()
+            };
+            let map = BrickGenerator::new(cfg).generate(w, h).expect("generate");
+            let cols = (scale * 2.0) as usize;
+            let period = w as usize / cols;
+            let line = |row| course_scanline(&map, w, h, scale, row);
+            let interior = best_shift(&line(0), &line(1), period);
+            // Course `scale - 1` is what course 0 of the tile above sits on.
+            let seam = best_shift(&line(scale as u32 - 1), &line(0), period);
+            (interior, seam, period)
+        };
+
+        let (interior, seam, period) = step(0.4);
+        let slack = period / 16;
+        assert!(
+            interior.abs_diff(seam) <= slack,
+            "product 2.0 should carry the bond across the seam: interior step {interior},              seam step {seam}, period {period}",
+        );
+
+        let (interior, seam, period) = step(0.5);
+        assert!(
+            interior.abs_diff(seam) > period / 8,
+            "product 2.5 should visibly break the bond at the seam, but interior step              {interior} and seam step {seam} agree (period {period})",
+        );
     }
 
     #[test]
