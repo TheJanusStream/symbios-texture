@@ -1,6 +1,6 @@
 [package]
 name = "symbios-texture"
-version = "0.4.4"
+version = "0.5.0"
 edition = "2024"
 authors = ["Janus"]
 description = "Procedural texture generation core for bevy_symbios_texture."
@@ -12,7 +12,7 @@ categories = ["simulation", "game-development", "mathematics"]
 
 [dependencies]
 noise = "0.9"
-rand = "0.9"
+rand = { version = "0.9", default-features = false, features = ["std", "std_rng"] }
 rayon = "1.11"
 serde = { version = "1.0", features = ["derive", "rc"] }
 symbios-genetics = "0.2"

@@ -153,9 +153,12 @@ implements [`TextureGenerator`].
   to drive a varied sweep of colour that a two-colour lerp flattens.
 - [`normal`](src/normal.rs) — heightmap → tangent-space normal map.
 - [`genetics`](src/genetics.rs) — `Genotype` impls for all configs.
+- [`envelope`](src/envelope.rs) — `ClampToEnvelope`, the range every
+  field is allowed to hold, for configs arriving from untrusted peers.
 - [`fingerprint`](src/fingerprint.rs) — stable structural hashing of
   configs for cache keys.
-- [`registry`](src/registry.rs) — the generator table macro.
+- [`registry`](src/registry.rs) — the generator table and the per-field
+  table, both macros.
 - One module per generator (`bark`, `rock`, `brick`, …).
 
 ## Adding a generator
@@ -164,9 +167,9 @@ implements [`TextureGenerator`].
    `TextureGenerator` impl, with tests.
 2. Add one row to the table in [`src/registry.rs`](src/registry.rs)
    (pick `Surface` or `Card`).
-3. Add the per-field `impl_genotype!` table in
-   [`src/genetics.rs`](src/genetics.rs), and the `impl_config_editor!`
-   table in the wrapper crate's `ui.rs`.
+3. Add one entry per field to `for_each_texture_field!` in
+   [`src/registry.rs`](src/registry.rs) — the range, the mutation step
+   and the UI label, authored once.
 4. Add it to the roster table above.
 
 ## License

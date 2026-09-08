@@ -8,6 +8,14 @@
 //! [`symbios_genetics::Genotype`] implementations, the [`fingerprint`]
 //! structural config hashing, and the canonical generator [`registry`].
 //!
+//! Two macros in [`registry`] are the crate's source of truth: one row per
+//! generator in [`for_each_generator!`], and one row per *field* in
+//! [`for_each_texture_field!`]. The second generates the `Genotype` impls and
+//! the [`ClampToEnvelope`] record-boundary clamp here, and the config editors
+//! in the wrapper crate. An application that mirrors these configs onto a
+//! wire format can drive its mirror and its sanitiser from the same rows
+//! rather than keeping a copy of every range.
+//!
 //! It depends only on bevy-free crates (`noise`, `rand`, `rayon`, `serde`,
 //! `symbios-genetics`).  The Bevy-coupled plugin, async generation pool, asset
 //! adapters, resource cache, and egui UI live in the `bevy_symbios_texture`
@@ -38,6 +46,7 @@ pub mod corrugated;
 pub mod cracked_earth;
 pub mod enamel;
 pub mod encaustic;
+pub mod envelope;
 pub mod fabric;
 pub mod fingerprint;
 pub mod flame;
@@ -94,6 +103,7 @@ pub mod window;
 
 pub use broadleaf::{BroadleafConfig, BroadleafGenerator};
 pub use cactus::{CactusSkinConfig, CactusSkinGenerator};
+pub use envelope::ClampToEnvelope;
 pub use frond::{FrondConfig, FrondGenerator};
 pub use generator::{
     MAX_DIMENSION, TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions,
