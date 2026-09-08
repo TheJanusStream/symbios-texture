@@ -444,8 +444,8 @@ macro_rules! for_each_texture_field {
         $crate::window::WindowConfig, "Window Config", window_config_editor {
             seed(seed, "Seed"),
             f64(frame_width, "Frame Width", 0.0, 0.4, 0.02) explore(0.02, 0.4),
-            usize(panes_x, "Panes X", 1, 6),
-            usize(panes_y, "Panes Y", 1, 8),
+            usize(panes_x, "Panes X", 1, 16) explore(1, 6),
+            usize(panes_y, "Panes Y", 1, 16) explore(1, 8),
             f64(mullion_thickness, "Mullion Thickness", 0.0, 0.2, 0.005) explore(0.005, 0.15),
             f64(corner_radius, "Corner Radius", 0.0, 0.4, 0.01) explore(0.0, 0.35),
             f64(glass_opacity, "Glass Opacity", 0.0, 1.0, 0.1),
@@ -588,7 +588,7 @@ macro_rules! for_each_texture_field {
         },
         $crate::corrugated::CorrugatedConfig, "Corrugated Metal Config", corrugated_config_editor {
             seed(seed, "Seed"),
-            f64_round(ridges, "Ridges", 2.0, 20.0, 2.0),
+            f64_round(ridges, "Ridges", 2.0, 32.0, 2.0) explore(2.0, 20.0),
             f64(ridge_depth, "Ridge Depth", 0.3, 2.5, 0.2),
             f64(roughness, "Roughness", 0.0, 1.0, 0.1),
             f64(rust_level, "Rust", 0.0, 1.0, 0.1),
