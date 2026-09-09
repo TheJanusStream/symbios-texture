@@ -80,15 +80,18 @@ assert_eq!(a.albedo, b.albedo);
 ### Evolving configs
 
 ```rust
-use rand::rng;
+use rand::{SeedableRng, rngs::StdRng};
 use symbios_genetics::Genotype;
 use symbios_texture::bark::BarkConfig;
 
+// Seeded, so an evolution run is replayable — the crate takes `rand`
+// without OS entropy, and every texture is a pure function of its seed.
+let mut rng = StdRng::seed_from_u64(42);
 let mut parent_a = BarkConfig::default();
 let parent_b = BarkConfig { seed: 7, ..BarkConfig::default() };
 
-parent_a.mutate(&mut rng(), 0.2);            // perturb ~20% of fields
-let child = parent_a.crossover(&parent_b, &mut rng());
+parent_a.mutate(&mut rng, 0.2);              // perturb ~20% of fields
+let child = parent_a.crossover(&parent_b, &mut rng);
 ```
 
 Mutation respects each field's natural range (and post-hooks re-snap
