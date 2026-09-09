@@ -84,19 +84,23 @@ fn every_built_surface_can_age() {
         (ashlar, AshlarConfig, AshlarGenerator),
         (asphalt, AsphaltConfig, AsphaltGenerator),
         (brick, BrickConfig, BrickGenerator),
+        (chain_link, ChainLinkConfig, ChainLinkGenerator),
         (cobblestone, CobblestoneConfig, CobblestoneGenerator),
         (concrete, ConcreteConfig, ConcreteGenerator),
         (corrugated, CorrugatedConfig, CorrugatedGenerator),
         (encaustic, EncausticConfig, EncausticGenerator),
         (fabric, FabricConfig, FabricGenerator),
+        (iron_grille, IronGrilleConfig, IronGrilleGenerator),
         (marble, MarbleConfig, MarbleGenerator),
         (metal, MetalConfig, MetalGenerator),
         (pavers, PaversConfig, PaversGenerator),
         (plank, PlankConfig, PlankGenerator),
         (shingle, ShingleConfig, ShingleGenerator),
+        (stained_glass, StainedGlassConfig, StainedGlassGenerator),
         (stucco, StuccoConfig, StuccoGenerator),
         (thatch, ThatchConfig, ThatchGenerator),
         (wainscoting, WainscotingConfig, WainscotingGenerator),
+        (window, WindowConfig, WindowGenerator),
     ];
 }
 

@@ -11,15 +11,16 @@
 //!    dirt accumulation.
 //! 4. Alpha: lead came = 255 (fully opaque); glass = 180 (semi-transparent).
 //! 5. Heights: lead = 1.0 (proud of the glass face); glass surface = grime bump.
-//!    `dilate_heights` is called before `height_to_normal` so the normal map
-//!    has no hard cliff at the alpha silhouette, and `BoundaryMode::Clamp` is
-//!    used because this is a card texture that must not tile.
+//!    Baked as a card through the [`surface`](crate::surface) driver —
+//!    clamp-to-edge normals over a silhouette-dilated height field — because
+//!    this is a card texture that must not tile.
 
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use crate::{
-    generator::{TextureError, TextureGenerator, TextureMap, linear_to_srgb, validate_dimensions},
-    normal::{BoundaryMode, dilate_heights, height_to_normal},
+    generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
+    surface::{SurfaceCell, SurfaceOptions, SurfaceSample, generate_surface_with},
+    weathering::WeatheringConfig,
 };
 
 /// Configures the appearance of a [`StainedGlassGenerator`].
@@ -38,6 +39,13 @@ pub struct StainedGlassConfig {
     pub glass_roughness: f64,
     /// Grime/dirt accumulation on glass \[0, 0.5\].
     pub grime_level: f64,
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -51,6 +59,7 @@ impl Default for StainedGlassConfig {
             saturation: 0.85,
             glass_roughness: 0.06,
             grime_level: 0.12,
+            weathering: WeatheringConfig::default(),
             normal_strength: 2.5,
         }
     }
@@ -84,107 +93,117 @@ impl StainedGlassGenerator {
     }
 }
 
-impl TextureGenerator for StainedGlassGenerator {
-    fn generate(&self, width: u32, height: u32) -> Result<TextureMap, TextureError> {
-        validate_dimensions(width, height)?;
-        let c = &self.config;
+/// Per-generation sampler: the site grid and the grime noise.
+struct StainedGlassCell<'a> {
+    config: &'a StainedGlassConfig,
+    grime_fbm: &'a Fbm<Perlin>,
+    /// Sites per axis; `grid_n²` is roughly `cell_count`.
+    grid_n: i64,
+    /// Lead threshold in UV distance units.
+    lead_threshold: f64,
+}
 
-        let w = width as usize;
-        let h = height as usize;
-        let n = w * h;
+/// ORM and alpha bytes the hand-rolled loop wrote with `(x * 255.0) as u8`,
+/// which truncates where [`generate_surface_with`] rounds.  `0.70 × 255`
+/// lands on 178.5 in `f32` and would pack as 179 through the driver; the
+/// other two agree either way but are named the same so the four bytes read
+/// as one decision.  Naming the byte keeps the port provably free of visual
+/// change; harmonising is #18's family.
+const LEAD_ROUGHNESS: f32 = 102.0 / 255.0;
+const LEAD_METALLIC: f32 = 204.0 / 255.0;
+const GLASS_METALLIC: f32 = 178.0 / 255.0;
+const GLASS_ALPHA: f64 = 180.0 / 255.0;
 
-        // Grid size: n×n gives approximately cell_count cells (n² ≈ cell_count).
-        let grid_n = ((c.cell_count as f64).sqrt().round() as i64).max(2);
+impl SurfaceCell for StainedGlassCell<'_> {
+    fn sample(&self, _x: u32, _y: u32, u: f64, v: f64) -> SurfaceSample {
+        let c = self.config;
+        let (f1, f2, ci, cj) = voronoi_f1_f2(u, v, self.grid_n, c.seed);
 
-        // Lead threshold in UV distance units.
-        let lead_threshold = c.lead_width / grid_n as f64;
-
-        let mut heights = vec![0.0f64; n];
-        let mut albedo = vec![0u8; n * 4];
-        let mut roughness_buf = vec![0u8; n * 4];
-
-        for y in 0..h {
-            let v = y as f64 / h as f64;
-
-            for x in 0..w {
-                let u = x as f64 / w as f64;
-                let idx = y * w + x;
-                let ai = idx * 4;
-
-                let (f1, f2, ci, cj) = voronoi_f1_f2(u, v, grid_n, c.seed);
-                let is_lead = (f2 - f1) < lead_threshold;
-
-                if is_lead {
-                    // Lead came: opaque dark metal.
-                    heights[idx] = 1.0;
-
-                    let lead_r: f32 = 0.05;
-                    let lead_g: f32 = 0.05;
-                    let lead_b: f32 = 0.06;
-                    albedo[ai] = linear_to_srgb(lead_r);
-                    albedo[ai + 1] = linear_to_srgb(lead_g);
-                    albedo[ai + 2] = linear_to_srgb(lead_b);
-                    albedo[ai + 3] = 255;
-
-                    roughness_buf[ai] = 255;
-                    roughness_buf[ai + 1] = (0.40 * 255.0) as u8;
-                    roughness_buf[ai + 2] = (0.80 * 255.0) as u8; // metallic lead
-                    roughness_buf[ai + 3] = 255;
-                } else {
-                    // Glass pane: derive vibrant colour from cell hash.
-                    let hue = cell_hash(ci, cj, c.seed.wrapping_add(100));
-                    let sat_h = cell_hash(cj, ci, c.seed.wrapping_add(200));
-                    let saturation = (0.70 + sat_h * 0.30) * c.saturation as f64;
-                    let glass_rgb = hsv_to_rgb(hue, saturation.clamp(0.0, 1.0), 0.85);
-
-                    // Grime: FBM dirt on the glass surface.
-                    let grime_raw = self.grime_fbm.get([u * 6.0, v * 6.0]) * 0.5 + 0.5;
-                    let grime = (grime_raw * c.grime_level) as f32;
-
-                    heights[idx] = grime_raw * c.grime_level * 0.05;
-
-                    // Darken glass slightly by grime.
-                    let r = (glass_rgb[0] - grime * 0.25).clamp(0.0, 1.0);
-                    let g = (glass_rgb[1] - grime * 0.20).clamp(0.0, 1.0);
-                    let b = (glass_rgb[2] - grime * 0.15).clamp(0.0, 1.0);
-
-                    albedo[ai] = linear_to_srgb(r);
-                    albedo[ai + 1] = linear_to_srgb(g);
-                    albedo[ai + 2] = linear_to_srgb(b);
-                    albedo[ai + 3] = 180; // semi-transparent glass
-
-                    // Glass ORM: low roughness, high metallic (simulates reflections).
-                    let glass_rough = (c.glass_roughness + grime_raw * c.grime_level * 0.2)
-                        .clamp(0.0, 1.0) as f32;
-                    roughness_buf[ai] = 255;
-                    roughness_buf[ai + 1] = (glass_rough * 255.0).round() as u8;
-                    roughness_buf[ai + 2] = (0.70 * 255.0) as u8; // reflective glass
-                    roughness_buf[ai + 3] = 255;
-                }
-            }
+        if (f2 - f1) < self.lead_threshold {
+            // Lead came: opaque dark metal, proud of the glass face.
+            return SurfaceSample {
+                height: 1.0,
+                color: [0.05, 0.05, 0.06],
+                roughness: LEAD_ROUGHNESS,
+                metallic: LEAD_METALLIC,
+                occlusion: 1.0,
+                emissive: [0.0, 0.0, 0.0],
+                alpha: 1.0,
+            };
         }
 
-        // Dilate opaque heights one step into transparent neighbours so the
-        // normal map avoids a hard cliff at the lead silhouette.
-        dilate_heights(&mut heights, &albedo, w, h);
+        // Glass pane: derive vibrant colour from cell hash.
+        let hue = cell_hash(ci, cj, c.seed.wrapping_add(100));
+        let sat_h = cell_hash(cj, ci, c.seed.wrapping_add(200));
+        let saturation = (0.70 + sat_h * 0.30) * c.saturation as f64;
+        let glass_rgb = hsv_to_rgb(hue, saturation.clamp(0.0, 1.0), 0.85);
 
-        let normal = height_to_normal(
-            &heights,
+        // Grime: FBM dirt on the glass surface, darkening it slightly.
+        let grime_raw = self.grime_fbm.get([u * 6.0, v * 6.0]) * 0.5 + 0.5;
+        let grime = (grime_raw * c.grime_level) as f32;
+
+        // Glass ORM: low roughness, high metallic (simulates reflections).
+        let glass_rough =
+            (c.glass_roughness + grime_raw * c.grime_level * 0.2).clamp(0.0, 1.0) as f32;
+
+        SurfaceSample {
+            height: grime_raw * c.grime_level * 0.05,
+            color: [
+                (glass_rgb[0] - grime * 0.25).clamp(0.0, 1.0),
+                (glass_rgb[1] - grime * 0.20).clamp(0.0, 1.0),
+                (glass_rgb[2] - grime * 0.15).clamp(0.0, 1.0),
+            ],
+            roughness: glass_rough,
+            metallic: GLASS_METALLIC,
+            occlusion: 1.0,
+            emissive: [0.0, 0.0, 0.0],
+            alpha: GLASS_ALPHA,
+        }
+    }
+}
+
+impl StainedGlassGenerator {
+    fn generate_inner(
+        &self,
+        width: u32,
+        height: u32,
+        workspace: Option<&mut Workspace>,
+    ) -> Result<TextureMap, TextureError> {
+        validate_dimensions(width, height)?;
+        let c = &self.config;
+        // Grid size: n×n gives approximately cell_count cells (n² ≈ cell_count).
+        let grid_n = ((c.cell_count as f64).sqrt().round() as i64).max(2);
+        let cell = StainedGlassCell {
+            config: c,
+            grime_fbm: &self.grime_fbm,
+            grid_n,
+            lead_threshold: c.lead_width / grid_n as f64,
+        };
+        generate_surface_with(
             width,
             height,
             c.normal_strength,
-            BoundaryMode::Clamp,
-        );
+            workspace,
+            &cell,
+            SurfaceOptions::default()
+                .with_card(true)
+                .with_weathering(&c.weathering),
+        )
+    }
+}
 
-        Ok(TextureMap {
-            albedo,
-            normal,
-            roughness: roughness_buf,
-            width,
-            height,
-            mip_level_count: 1,
-            emissive: None,
-        })
+impl TextureGenerator for StainedGlassGenerator {
+    fn generate(&self, width: u32, height: u32) -> Result<TextureMap, TextureError> {
+        self.generate_inner(width, height, None)
+    }
+
+    fn generate_with_workspace(
+        &self,
+        width: u32,
+        height: u32,
+        workspace: &mut Workspace,
+    ) -> Result<TextureMap, TextureError> {
+        self.generate_inner(width, height, Some(workspace))
     }
 }
 

@@ -451,6 +451,7 @@ macro_rules! for_each_texture_field {
             f64(glass_opacity, "Glass Opacity", 0.0, 1.0, 0.1),
             f64(grime_level, "Grime", 0.0, 1.0, 0.1),
             color3(color_frame, "Frame Color", 0.07),
+            nested(weathering, $crate::weathering::WeatheringConfig, weathering_config_editor, "window_weather"),
             f32(normal_strength, "Normal Strength", 0.0, 8.0, 0.5) explore(0.5, 6.0),
         },
         $crate::plank::PlankConfig, "Plank Config", plank_config_editor {
@@ -631,6 +632,7 @@ macro_rules! for_each_texture_field {
             f32(saturation, "Saturation", 0.3, 1.0, 0.1),
             f64(glass_roughness, "Glass Roughness", 0.0, 0.2, 0.02),
             f64(grime_level, "Grime", 0.0, 0.6, 0.05),
+            nested(weathering, $crate::weathering::WeatheringConfig, weathering_config_editor, "stained_glass_weather"),
             f32(normal_strength, "Normal Strength", 0.0, 4.0, 0.3),
         },
         $crate::iron_grille::IronGrilleConfig, "Iron Grille Config", iron_grille_config_editor {
@@ -642,6 +644,7 @@ macro_rules! for_each_texture_field {
             f64(rust_level, "Rust", 0.0, 1.0, 0.1),
             color3(color_iron, "Iron Color", 0.07),
             color3(color_rust, "Rust Color", 0.07),
+            nested(weathering, $crate::weathering::WeatheringConfig, weathering_config_editor, "iron_grille_weather"),
             f32(normal_strength, "Normal Strength", 0.0, 6.0, 0.5) explore(0.5, 6.0),
         },
         $crate::encaustic::EncausticConfig, "Encaustic Tile Config", encaustic_config_editor {
@@ -769,6 +772,7 @@ macro_rules! for_each_texture_field {
             f64(rust_level, "Rust Level", 0.0, 1.0, 0.1),
             color3(color_wire, "Wire Color", 0.06),
             color3(color_rust, "Rust Color", 0.06),
+            nested(weathering, $crate::weathering::WeatheringConfig, weathering_config_editor, "chain_link_weather"),
             f32(normal_strength, "Normal Strength", 0.5, 6.0, 0.3),
         },
         $crate::lava::LavaConfig, "Lava Config", lava_config_editor {

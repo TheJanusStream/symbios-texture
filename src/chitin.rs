@@ -157,6 +157,7 @@ impl SurfaceCell for ChitinCell<'_> {
             metallic: lerp(c.metallic, 0.0, seam_t).clamp(0.0, 1.0),
             occlusion: lerp(1.0, 0.55, seam_t),
             emissive: [0.0, 0.0, 0.0],
+            alpha: 1.0,
         }
     }
 }

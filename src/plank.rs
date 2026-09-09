@@ -295,15 +295,13 @@ impl TextureGenerator for PlankGenerator {
     }
 }
 
-/// Roughness of a joint pixel, as the byte the hand-rolled loop wrote.
+/// Roughness of a joint pixel.
 ///
-/// That loop packed the joint with `(0.92 * 255.0) as u8`, which **truncates**
-/// 234.6 to 234, where [`crate::surface::generate_surface`] rounds every ORM channel — 0.92
-/// through the driver would pack 235.  Naming the byte instead of the intent
-/// keeps the port provably free of visual change, which is what
-/// `plank_output_is_byte_stable` is there to guard.  Harmonising it with the
-/// other generators is #18.
-const JOINT_ROUGHNESS: f32 = 234.0 / 255.0;
+/// Until 0.7.0 this named the byte the hand-rolled loop had *truncated* to —
+/// `(0.92 * 255.0) as u8` is 234 — so that the port to the surface driver
+/// could be proved free of visual change.  It is the intended value now and
+/// packs 235, rounded like every other ORM channel (#18).
+const JOINT_ROUGHNESS: f32 = 0.92;
 
 // --- helpers ----------------------------------------------------------------
 

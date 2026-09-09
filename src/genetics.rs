@@ -121,9 +121,7 @@ fn crossover_color3<R: Rng>(a: [f32; 3], b: [f32; 3], rng: &mut R) -> [f32; 3] {
 /// Snap `row_offset` so `scale * row_offset` is an integer — required for a
 /// brick bond to tile vertically.
 fn snap_row_offset(cfg: &mut BrickConfig) {
-    if cfg.scale > 0.0 {
-        cfg.row_offset = (cfg.scale * cfg.row_offset).round() / cfg.scale;
-    }
+    cfg.snap_row_offset();
 }
 
 /// Snap `stagger` so `scale * stagger` is an integer — the same tiling

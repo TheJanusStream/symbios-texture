@@ -180,6 +180,7 @@ impl SurfaceCell for GravelCell<'_> {
             metallic: 0.0,
             occlusion,
             emissive: [0.0, 0.0, 0.0],
+            alpha: 1.0,
         }
     }
 }

@@ -209,6 +209,7 @@ impl SurfaceCell for LavaCell<'_> {
             metallic: 0.0,
             occlusion: 1.0,
             emissive,
+            alpha: 1.0,
         }
     }
 }

@@ -154,6 +154,7 @@ impl SurfaceCell for CrackedEarthCell<'_> {
             metallic: 0.0,
             occlusion,
             emissive: [0.0, 0.0, 0.0],
+            alpha: 1.0,
         }
     }
 }

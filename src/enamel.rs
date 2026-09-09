@@ -134,6 +134,7 @@ impl SurfaceCell for EnamelCell<'_> {
             metallic: lerp(c.metallic, 0.0, t).clamp(0.0, 1.0),
             occlusion: lerp(1.0, 0.7, t),
             emissive: [0.0, 0.0, 0.0],
+            alpha: 1.0,
         }
     }
 }

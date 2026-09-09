@@ -58,6 +58,8 @@ pub mod genetics;
 pub mod grass;
 pub mod gravel;
 pub mod ground;
+pub mod hex_blend;
+mod hex_lattice;
 pub mod ice;
 pub mod iron_grille;
 pub mod lava;
@@ -110,6 +112,7 @@ pub use generator::{
     MAX_DIMENSION, TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions,
 };
 pub use grass::{GrassTuftConfig, GrassTuftGenerator};
+pub use hex_blend::{HexBlendConfig, hex_blend};
 pub use leaf::{LeafConfig, LeafGenerator, LeafSample, LeafSampler, sample_leaf};
 pub use lichen::{LichenConfig, LichenGenerator};
 pub use moss::{MossConfig, MossGenerator};

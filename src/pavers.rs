@@ -11,6 +11,7 @@ use noise::{Fbm, MultiFractal, Perlin};
 
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
+    hex_lattice::{HexLattice, SQRT3, cube_round},
     noise::{ToroidalNoise, normalize, sample_grid_into},
     surface::{SurfaceCell, SurfaceSample, generate_surface_weathered},
     weathering::WeatheringConfig,
@@ -281,22 +282,8 @@ fn square_cell(
 /// gives one representative per cell, so a paver cut in half by the tile's
 /// own edge hashes once and draws one colour instead of two.
 fn hex_cell(u: f64, v: f64, scale: f64, grout_half: f64, bevel_r: f64) -> (f64, i64, i64) {
-    const SQRT3: f64 = 1.732_050_807_568_877_3;
-
-    // Vertical tiling requires an integer number of rows; round scale.
-    let rows = scale.round().max(1.0);
-    // Circumradius so that `rows` hex rows fit exactly across [0, 1].
-    let hex_r = 1.0 / (rows * SQRT3);
-    // Column count: the natural float value is `1 / (1.5 * hex_r)`, rounded
-    // to the nearest even integer for the reason in the tiling note above.
-    let cols = ((rows * SQRT3 / 1.5) * 0.5).round().max(1.0) * 2.0;
-
-    // Fractional axial coordinates (flat-top convention), written in terms of
-    // the row and column counts rather than through `hex_r`.  A whole-tile
-    // step then moves them by exactly `cols` and `-cols / 2`, both integers,
-    // which is what makes the seam identities hold bit for bit.
-    let qf = u * cols;
-    let rf = v * rows - 0.5 * qf;
+    let lat = HexLattice::new(scale);
+    let (qf, rf) = lat.axial(u, v);
     let sf = -qf - rf;
 
     // Cube-round to the nearest hex center and keep the offset within the cell.
@@ -304,43 +291,20 @@ fn hex_cell(u: f64, v: f64, scale: f64, grout_half: f64, bevel_r: f64) -> (f64, 
     let (dq, dr) = (qf - q as f64, rf - r as f64);
 
     // That offset in stretched UV space, where the SDF is evaluated (the hexes
-    // are slightly non-regular there, per the tiling note).
-    let dx = 1.5 * hex_r * dq;
-    let dy = SQRT3 * hex_r * (dr + 0.5 * dq);
+    // are slightly non-regular there, per the lattice's note).
+    let dx = 1.5 * lat.hex_r * dq;
+    let dy = SQRT3 * lat.hex_r * (dr + 0.5 * dq);
 
     // The cell's own apothem is half the row pitch; `grout_half` and
     // `bevel_r` are fractions of that pitch, exactly as `square_cell`
     // takes them against a pitch of one.
-    let pitch = SQRT3 * hex_r;
+    let pitch = SQRT3 * lat.hex_r;
     let bevel = bevel_r * pitch;
     let stone = (pitch * (0.5 - grout_half) - bevel).max(0.0);
     let sdf = hex_sdf(dx, dy, stone) - bevel;
 
-    // Canonical cell id: undo `n` whole-tile steps in U, then reduce V.
-    let (cols_i, rows_i) = (cols as i64, rows as i64);
-    let n = q.div_euclid(cols_i);
-    let cell_q = q.rem_euclid(cols_i);
-    let cell_r = (r + n * (cols_i / 2)).rem_euclid(rows_i);
-
+    let (cell_q, cell_r) = lat.canonical(q, r);
     (sdf, cell_q, cell_r)
-}
-
-/// Cube-coordinate rounding (standard hex-grid algorithm).
-#[inline]
-fn cube_round(qf: f64, rf: f64, sf: f64) -> (i64, i64, i64) {
-    let (rq, rr, rs) = (qf.round() as i64, rf.round() as i64, sf.round() as i64);
-    let (dq, dr, ds) = (
-        (rq as f64 - qf).abs(),
-        (rr as f64 - rf).abs(),
-        (rs as f64 - sf).abs(),
-    );
-    if dq > dr && dq > ds {
-        (-rr - rs, rr, rs)
-    } else if dr > ds {
-        (rq, -rq - rs, rs)
-    } else {
-        (rq, rr, -rq - rr)
-    }
 }
 
 /// IQ's flat-top hexagon SDF.

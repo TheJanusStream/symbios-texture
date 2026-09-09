@@ -224,6 +224,7 @@ impl SurfaceCell for ForestFloorCell<'_> {
                 metallic: 0.0,
                 occlusion: 0.55,
                 emissive: [0.0, 0.0, 0.0],
+                alpha: 1.0,
             };
         };
 
@@ -261,6 +262,7 @@ impl SurfaceCell for ForestFloorCell<'_> {
             // Leaf edges tuck into the litter below them.
             occlusion: lerp(0.7, 1.0, cup as f32),
             emissive: [0.0, 0.0, 0.0],
+            alpha: 1.0,
         }
     }
 }

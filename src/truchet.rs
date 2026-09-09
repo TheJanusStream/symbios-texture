@@ -175,6 +175,7 @@ impl SurfaceCell for TruchetCell<'_> {
             metallic: lerp(0.0, c.trace_metallic, t).clamp(0.0, 1.0),
             occlusion: 1.0,
             emissive,
+            alpha: 1.0,
         }
     }
 }

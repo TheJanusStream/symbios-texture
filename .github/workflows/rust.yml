@@ -23,6 +23,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt, clippy
+          target: wasm32-unknown-unknown
           cache: false
 
       - name: Install Linux dependencies
@@ -40,3 +41,8 @@ jobs:
 
       - name: Run Tests
         run: cargo test --verbose
+
+      # Green once symbios-genetics 0.2.2 is on the registry (its rand no
+      # longer carries os_rng); until then getrandom fails to build for wasm.
+      - name: Check wasm32 (lib)
+        run: cargo check --target wasm32-unknown-unknown --lib

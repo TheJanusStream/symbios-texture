@@ -137,6 +137,7 @@ impl SurfaceCell for ObsidianCell<'_> {
             metallic: c.metallic.clamp(0.0, 1.0),
             occlusion: 1.0,
             emissive: [0.0, 0.0, 0.0],
+            alpha: 1.0,
         }
     }
 }

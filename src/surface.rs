@@ -1,4 +1,5 @@
-//! Shared scaffolding for tileable surface generators.
+//! Shared scaffolding for tileable surface generators — and, through
+//! [`SurfaceOptions::card`], for the alpha cards that share their shading.
 //!
 //! Mirrors the [`sprite`](crate::sprite) architecture for the surface
 //! family: each generator module defines a *cell sampler* — a struct
@@ -27,7 +28,7 @@ use rayon::prelude::*;
 
 use crate::{
     generator::{TextureError, TextureMap, Workspace, linear_to_srgb, validate_dimensions},
-    normal::{BoundaryMode, height_to_normal},
+    normal::{BoundaryMode, dilate_heights, height_to_normal},
     weathering::WeatheringConfig,
 };
 
@@ -53,6 +54,14 @@ pub struct SurfaceSample {
     /// channel by [`generate_surface_emissive`], or at the generator's
     /// discretion via [`SurfaceOptions::emissive`].
     pub emissive: [f32; 3],
+    /// Coverage in `[0, 1]`, packed into the albedo alpha byte.  `1` for
+    /// every tileable surface; a card writes less — `0` in the open mesh of
+    /// a fence, a fraction on a pane of glass.  As with
+    /// [`SpriteSample`](crate::sprite::SpriteSample), `color` must still be
+    /// meaningful where `alpha == 0`: the driver packs it into transparent
+    /// texels so bilinear filtering at the silhouette has no dark halo to
+    /// pull in.
+    pub alpha: f64,
 }
 
 impl SurfaceSample {
@@ -67,6 +76,7 @@ impl SurfaceSample {
             metallic: 0.0,
             occlusion: 1.0,
             emissive: [0.0, 0.0, 0.0],
+            alpha: 1.0,
         }
     }
 }
@@ -89,6 +99,9 @@ pub struct SurfaceField {
     pub metallic: f32,
     /// Ambient occlusion `[0, 1]` (ORM red channel).
     pub occlusion: f32,
+    /// Coverage `[0, 1]` (albedo alpha byte).  Carried, never aged: the
+    /// weathering pass does not read or write it.
+    pub alpha: f64,
 }
 
 impl From<&SurfaceSample> for SurfaceField {
@@ -98,6 +111,7 @@ impl From<&SurfaceSample> for SurfaceField {
             roughness: s.roughness,
             metallic: s.metallic,
             occlusion: s.occlusion,
+            alpha: s.alpha,
         }
     }
 }
@@ -111,7 +125,7 @@ fn pack_texel(f: &SurfaceField, albedo_px: &mut [u8], orm_px: &mut [u8]) {
     albedo_px[0] = linear_to_srgb(f.color[0]);
     albedo_px[1] = linear_to_srgb(f.color[1]);
     albedo_px[2] = linear_to_srgb(f.color[2]);
-    albedo_px[3] = 255;
+    albedo_px[3] = (f.alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
 
     orm_px[0] = (f.occlusion.clamp(0.0, 1.0) * 255.0).round() as u8;
     orm_px[1] = (f.roughness.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -139,11 +153,14 @@ pub trait SurfaceCell {
 /// The driver:
 ///
 /// 1. samples every texel via [`SurfaceCell::sample`],
-/// 2. packs albedo (sRGB-encoded, opaque) and ORM
-///    (occlusion / roughness / metallic from the sample),
+/// 2. packs albedo (sRGB-encoded; alpha from the sample, which is opaque
+///    for a surface) and ORM (occlusion / roughness / metallic from the
+///    sample),
 /// 3. derives the tangent-space normal map from the height field with
 ///    toroidal ([`BoundaryMode::Wrap`]) neighbours, so normals tile
-///    seamlessly alongside the colour data.
+///    seamlessly alongside the colour data.  A card
+///    ([`SurfaceOptions::card`]) clamps instead, after dilating the height
+///    field under its silhouette.
 ///
 /// Rows are sampled in parallel — `cell` must be `Sync`.  Work runs on the
 /// ambient rayon pool: async generation tasks already execute on the
@@ -189,6 +206,15 @@ pub struct SurfaceOptions<'a> {
     pub emissive: bool,
     /// Age the result through the [`weathering`](crate::weathering) post-pass.
     pub weathering: Option<&'a WeatheringConfig>,
+    /// Bake a card rather than a tileable surface.  Normals are derived
+    /// clamp-to-edge ([`BoundaryMode::Clamp`]) instead of wrapping, after the
+    /// height field is dilated one texel under transparent neighbours so the
+    /// silhouette has no cliff — the two steps the sprite driver takes.  Says
+    /// nothing about alpha itself: the cell writes that through
+    /// [`SurfaceSample::alpha`].  Under weathering, a card's transparent
+    /// texels are read but never written (see
+    /// [`generate_surface_with`]).
+    pub card: bool,
 }
 
 impl<'a> SurfaceOptions<'a> {
@@ -203,6 +229,14 @@ impl<'a> SurfaceOptions<'a> {
     #[must_use]
     pub fn with_weathering(mut self, weathering: &'a WeatheringConfig) -> Self {
         self.weathering = Some(weathering);
+        self
+    }
+
+    /// Bake a card: clamp-to-edge normals over a silhouette-dilated height
+    /// field.
+    #[must_use]
+    pub fn with_card(mut self, card: bool) -> Self {
+        self.card = card;
         self
     }
 }
@@ -230,16 +264,9 @@ pub fn generate_surface_with<C: SurfaceCell + Sync>(
             workspace,
             cell,
             weathering,
-            options.emissive,
+            options,
         ),
-        None => generate_surface_impl(
-            width,
-            height,
-            normal_strength,
-            workspace,
-            cell,
-            options.emissive,
-        ),
+        None => generate_surface_impl(width, height, normal_strength, workspace, cell, options),
     }
 }
 
@@ -328,9 +355,14 @@ fn generate_surface_weathered_impl<C: SurfaceCell + Sync>(
     mut workspace: Option<&mut Workspace>,
     cell: &C,
     weathering: &WeatheringConfig,
-    emit: bool,
+    options: SurfaceOptions<'_>,
 ) -> Result<TextureMap, TextureError> {
     validate_dimensions(width, height)?;
+    let SurfaceOptions {
+        emissive: emit,
+        card,
+        ..
+    } = options;
 
     let w = width as usize;
     let h = height as usize;
@@ -349,6 +381,7 @@ fn generate_surface_weathered_impl<C: SurfaceCell + Sync>(
             roughness: 0.0,
             metallic: 0.0,
             occlusion: 1.0,
+            alpha: 1.0,
         };
         n
     ];
@@ -410,7 +443,22 @@ fn generate_surface_weathered_impl<C: SurfaceCell + Sync>(
     }
 
     // Phase 2 — age the shading, and the height field the normals come from.
+    //
+    // A card's transparent texels take part as *input* — the open mesh of a
+    // fence sitting at height zero is what makes its wires convex — but are
+    // never written back.  Whatever the cell put under alpha zero is a halo
+    // guard for bilinear filtering at the silhouette, and dirt settling there
+    // would bleed into the edge.
+    let pristine = card.then(|| (fields.clone(), heights.clone()));
     crate::weathering::apply(&mut fields, &mut heights, width, height, weathering);
+    if let Some((fields0, heights0)) = pristine {
+        for (i, f) in fields.iter_mut().enumerate() {
+            if f.alpha <= 0.0 {
+                *f = fields0[i];
+                heights[i] = heights0[i];
+            }
+        }
+    }
 
     // Phase 3 — pack the aged fields.
     let mut albedo = vec![0u8; n * 4];
@@ -426,7 +474,7 @@ fn generate_surface_weathered_impl<C: SurfaceCell + Sync>(
             }
         });
 
-    let normal = height_to_normal(&heights, width, height, normal_strength, BoundaryMode::Wrap);
+    let normal = derive_normals(&mut heights, &albedo, width, height, normal_strength, card);
 
     if let Some(ws) = workspace {
         ws.return_grid(heights);
@@ -449,9 +497,14 @@ fn generate_surface_impl<C: SurfaceCell + Sync>(
     normal_strength: f32,
     mut workspace: Option<&mut Workspace>,
     cell: &C,
-    emit: bool,
+    options: SurfaceOptions<'_>,
 ) -> Result<TextureMap, TextureError> {
     validate_dimensions(width, height)?;
+    let SurfaceOptions {
+        emissive: emit,
+        card,
+        ..
+    } = options;
 
     let w = width as usize;
     let h = height as usize;
@@ -530,7 +583,7 @@ fn generate_surface_impl<C: SurfaceCell + Sync>(
             });
     }
 
-    let normal = height_to_normal(&heights, width, height, normal_strength, BoundaryMode::Wrap);
+    let normal = derive_normals(&mut heights, &albedo, width, height, normal_strength, card);
 
     if let Some(ws) = workspace {
         ws.return_grid(heights);
@@ -545,6 +598,25 @@ fn generate_surface_impl<C: SurfaceCell + Sync>(
         mip_level_count: 1,
         emissive: if emit { Some(emissive) } else { None },
     })
+}
+
+/// The normal map for a finished height field: toroidal for a surface;
+/// for a card, clamp-to-edge over heights first dilated one texel under the
+/// transparent texels of `albedo`, so the silhouette has no cliff.
+fn derive_normals(
+    heights: &mut [f64],
+    albedo: &[u8],
+    width: u32,
+    height: u32,
+    normal_strength: f32,
+    card: bool,
+) -> Vec<u8> {
+    if card {
+        dilate_heights(heights, albedo, width as usize, height as usize);
+        height_to_normal(heights, width, height, normal_strength, BoundaryMode::Clamp)
+    } else {
+        height_to_normal(heights, width, height, normal_strength, BoundaryMode::Wrap)
+    }
 }
 
 /// Linear interpolation between two `f32` values with `t` clamped to
@@ -571,6 +643,7 @@ mod tests {
                 metallic: 1.0,
                 occlusion: 0.0,
                 emissive: [0.0, 0.0, 0.0],
+                alpha: 1.0,
             }
         }
     }
@@ -634,6 +707,7 @@ mod tests {
                 metallic: 0.0,
                 occlusion: 1.0,
                 emissive: [0.2, 0.0, 0.0],
+                alpha: 1.0,
             }
         }
     }
@@ -843,5 +917,156 @@ mod tests {
                 .expect("second");
         assert_eq!(a.albedo, b.albedo, "pooled buffers changed the result");
         assert_eq!(a.normal, b.normal);
+    }
+
+    /// A card: transparent on the left half, an opaque bumpy plate on the
+    /// right.  The transparent side carries a halo-guard colour and sits at
+    /// height zero, exactly as the fence and grille cards do.
+    struct HalfCard;
+
+    const HALO: [f32; 3] = [0.62, 0.64, 0.66];
+
+    impl SurfaceCell for HalfCard {
+        fn sample(&self, _x: u32, _y: u32, u: f64, v: f64) -> SurfaceSample {
+            use std::f64::consts::TAU;
+            if u < 0.5 {
+                SurfaceSample {
+                    alpha: 0.0,
+                    ..SurfaceSample::matte(0.0, HALO, 0.6)
+                }
+            } else {
+                let height = 0.6 + 0.4 * (TAU * 4.0 * u).sin() * (TAU * 4.0 * v).sin();
+                SurfaceSample::matte(height, [0.3, 0.2, 0.1], 0.5)
+            }
+        }
+    }
+
+    #[test]
+    fn alpha_packs_the_cell_coverage() {
+        struct Half;
+        impl SurfaceCell for Half {
+            fn sample(&self, _x: u32, _y: u32, _u: f64, _v: f64) -> SurfaceSample {
+                SurfaceSample {
+                    alpha: 0.5,
+                    ..SurfaceSample::matte(0.5, [1.0, 1.0, 1.0], 0.5)
+                }
+            }
+        }
+        let map = generate_surface(4, 4, 1.0, None, &Half).expect("generate");
+        assert_eq!(map.albedo[3], 128, "alpha 0.5 → 128");
+        let opaque = generate_surface(4, 4, 1.0, None, &Flat).expect("generate");
+        assert_eq!(opaque.albedo[3], 255, "matte() is opaque");
+    }
+
+    /// `card` is exactly the two steps the hand-rolled cards took — dilate
+    /// the height field under the silhouette, then clamp-to-edge normals —
+    /// and nothing else: the albedo, alpha included, is the cell's alone.
+    #[test]
+    fn a_card_dilates_then_clamps_and_touches_nothing_else() {
+        let (w, h) = (16u32, 8u32);
+        let card = generate_surface_with(
+            w,
+            h,
+            1.0,
+            None,
+            &HalfCard,
+            SurfaceOptions::default().with_card(true),
+        )
+        .expect("card");
+        let surface = generate_surface(w, h, 1.0, None, &HalfCard).expect("surface");
+
+        assert_eq!(card.albedo, surface.albedo, "card must not touch albedo");
+        assert_eq!(card.roughness, surface.roughness, "card must not touch ORM");
+        assert_eq!(card.albedo[3], 0, "the transparent half packs alpha 0");
+        assert_eq!(card.albedo[(w as usize - 1) * 4 + 3], 255);
+
+        // The reference is what every card generator used to do by hand.
+        let mut heights: Vec<f64> = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                HalfCard
+                    .sample(
+                        x,
+                        y,
+                        f64::from(x) / f64::from(w),
+                        f64::from(y) / f64::from(h),
+                    )
+                    .height
+            })
+            .collect();
+        dilate_heights(&mut heights, &card.albedo, w as usize, h as usize);
+        let expected = height_to_normal(&heights, w, h, 1.0, BoundaryMode::Clamp);
+        assert_eq!(card.normal, expected, "card normals are dilate-then-clamp");
+        assert_ne!(
+            card.normal, surface.normal,
+            "a card's normals cannot be the wrapped surface's",
+        );
+    }
+
+    /// Weathering a card reads its transparent texels — they are the ground
+    /// its opaque parts stand proud of — but never writes them.
+    #[test]
+    fn weathering_a_card_leaves_its_transparent_texels_alone() {
+        let (w, h) = (24u32, 24u32);
+        let plain = generate_surface_with(
+            w,
+            h,
+            1.0,
+            None,
+            &HalfCard,
+            SurfaceOptions::default().with_card(true),
+        )
+        .expect("plain");
+        let weathering = weathered_config();
+        let aged = generate_surface_with(
+            w,
+            h,
+            1.0,
+            None,
+            &HalfCard,
+            SurfaceOptions::default()
+                .with_card(true)
+                .with_weathering(&weathering),
+        )
+        .expect("aged");
+
+        let mut opaque_changed = 0;
+        for i in 0..(w * h) as usize {
+            let (a, o) = (
+                &aged.albedo[i * 4..i * 4 + 4],
+                &plain.albedo[i * 4..i * 4 + 4],
+            );
+            assert_eq!(a[3], o[3], "weathering moved an alpha byte at texel {i}");
+            if o[3] == 0 {
+                assert_eq!(a, o, "weathering wrote a transparent texel's albedo at {i}");
+                assert_eq!(
+                    &aged.roughness[i * 4..i * 4 + 4],
+                    &plain.roughness[i * 4..i * 4 + 4],
+                    "weathering wrote a transparent texel's ORM at {i}",
+                );
+            } else if a != o {
+                opaque_changed += 1;
+            }
+        }
+        assert!(
+            opaque_changed > 0,
+            "weathering never reached the opaque half"
+        );
+
+        // And a no-op config is the plain card, bit for bit.
+        let untouched = generate_surface_with(
+            w,
+            h,
+            1.0,
+            None,
+            &HalfCard,
+            SurfaceOptions::default()
+                .with_card(true)
+                .with_weathering(&WeatheringConfig::default()),
+        )
+        .expect("untouched");
+        assert_eq!(untouched.albedo, plain.albedo);
+        assert_eq!(untouched.normal, plain.normal);
+        assert_eq!(untouched.roughness, plain.roughness);
     }
 }

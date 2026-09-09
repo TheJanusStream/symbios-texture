@@ -267,6 +267,7 @@ impl SurfaceCell for ParquetCell<'_> {
             metallic: 0.0,
             occlusion: lerp(1.0, 0.5, j),
             emissive: [0.0, 0.0, 0.0],
+            alpha: 1.0,
         }
     }
 }

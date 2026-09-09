@@ -177,6 +177,7 @@ impl SurfaceCell for CactusSkinCell {
             metallic: 0.0,
             occlusion: 1.0,
             emissive: [0.0, 0.0, 0.0],
+            alpha: 1.0,
         }
     }
 }

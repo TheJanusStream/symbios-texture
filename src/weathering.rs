@@ -801,6 +801,7 @@ mod tests {
             roughness: 0.5,
             metallic: 0.0,
             occlusion: 1.0,
+            alpha: 1.0,
         }
     }
 

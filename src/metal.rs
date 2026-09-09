@@ -274,6 +274,7 @@ impl SurfaceCell for MetalCell<'_> {
             metallic: met,
             occlusion,
             emissive: [0.0, 0.0, 0.0],
+            alpha: 1.0,
         }
     }
 }

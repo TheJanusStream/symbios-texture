@@ -140,19 +140,27 @@ implements [`TextureGenerator`].
   layer, so embedding it costs nothing until a layer is turned up.
 
   Every generator depicting a **built or dressed** surface carries a
-  `weathering` block: ashlar, asphalt, brick, chitin, cobblestone,
-  concrete, corrugated, enamel, encaustic, fabric, marble, metal,
-  obsidian, parquet, pavers, plank, rock, shingle, solar panel, stucco,
-  thatch, truchet and wainscoting. Natural surfaces are deliberately
+  `weathering` block: ashlar, asphalt, brick, chain link, chitin,
+  cobblestone, concrete, corrugated, enamel, encaustic, fabric, iron
+  grille, marble, metal, obsidian, parquet, pavers, plank, rock, shingle,
+  solar panel, stained glass, stucco, thatch, truchet, wainscoting and
+  window. The four alpha cards among them bake through the same driver
+  with `SurfaceOptions::card`, and weathering reads their transparent
+  texels without writing them. Natural surfaces are deliberately
   excluded — sand, snow, moss, bark and their kin already read as
   weathered, and a second ageing pass over them fights the generator
-  rather than helping it.
-
-  Eight modules still hand-roll a pixel loop rather than driving
-  `generate_surface`, so they cannot be handed a `WeatheringConfig`
-  without being ported first: `bark`, `chain_link`, `iron_grille`,
-  `leaf`, `log_end`, `stained_glass`, `twig` and `window`. Four of those
-  are built surfaces that would read better aged.
+  rather than helping it; `bark`, `leaf`, `log_end` and `twig` are the
+  four modules that still hand-roll a pixel loop, and nothing is waiting
+  on them.
+- [`hex_blend`](src/hex_blend.rs) — bake-time de-repetition: rebuilds a
+  tileable texture as a tile with no structure wider than a chosen cell, by
+  blending three randomly windowed copies of an example on a hexagonal
+  lattice in a per-channel Gaussianised space (Heitz & Neyret's
+  histogram-preserving blend), so the result keeps the example's histogram
+  and contrast rather than going grey. For splats laid across hundreds of
+  metres, whose repeat the eye reads off large structure. The output tiles
+  exactly; the example may be oversized so each window shows different
+  content. Bake time only — 512² from a 768² example in about 19 ms.
 - [`palette`](src/palette.rs) — `CosinePalette`, a four-vector colour ramp
   (`bias + amplitude·cos(2π(frequency·t + phase))`) for when one scalar has
   to drive a varied sweep of colour that a two-colour lerp flattens.

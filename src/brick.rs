@@ -30,6 +30,9 @@ pub struct BrickConfig {
     pub scale: f64,
     /// Lateral offset per row as a fraction of brick width.
     /// `0.0` = stack bond, `0.5` = running bond, `0.333` = third bond.
+    ///
+    /// [`BrickGenerator::new`] snaps it so the product *is* one: a value
+    /// authored off-grid lays the nearest bond that tiles (#14).
     pub row_offset: f64,
     /// Brick width-to-height ratio (e.g. `2.0` = standard 2:1 brick).
     ///
@@ -60,6 +63,18 @@ pub struct BrickConfig {
     pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
+}
+
+impl BrickConfig {
+    /// Snap `row_offset` so `scale × row_offset` is an integer — the bond only
+    /// continues across the V seam when it is.  The genotype fixup applies
+    /// this after every mutation and [`BrickGenerator::new`] applies it to
+    /// whatever it is handed, so the two paths cannot disagree.
+    pub fn snap_row_offset(&mut self) {
+        if self.scale > 0.0 {
+            self.row_offset = (self.scale * self.row_offset).round() / self.scale;
+        }
+    }
 }
 
 impl Default for BrickConfig {
@@ -100,7 +115,8 @@ impl BrickGenerator {
     ///
     /// Builds the noise objects up front so that repeated
     /// calls to [`generate`](TextureGenerator::generate) skip initialisation.
-    pub fn new(config: BrickConfig) -> Self {
+    pub fn new(mut config: BrickConfig) -> Self {
+        config.snap_row_offset();
         let fbm_rough: Fbm<Perlin> = Fbm::new(config.seed.wrapping_add(50)).set_octaves(4);
         let rough_noise = ToroidalNoise::new(fbm_rough, config.scale * config.aspect_ratio * 2.0);
 
@@ -364,17 +380,17 @@ mod tests {
     }
 
     /// The bond only continues across the V seam when `scale × row_offset` is
-    /// an integer, which [`BrickConfig`] documents as a constraint on the
-    /// caller.  This pins that documentation to a measurement, because the
-    /// failure is silent: nothing rejects a bad pair, and the tile looks fine
-    /// on its own — the mis-step only appears once it is laid twice vertically.
-    ///
-    /// Measured as a step rather than an absolute offset: every interior pair
-    /// of courses steps sideways by the same amount, so the seam pair must
-    /// step by that same amount too.  `scale = 5, row_offset = 0.4` gives a
-    /// product of 2 and holds; `row_offset = 0.5` gives 2.5 and jumps.
+    /// an integer, which [`BrickConfig`] has always documented and which, since
+    /// 0.7.0, [`BrickGenerator::new`] enforces by snapping `row_offset` the way
+    /// the genotype fixup already did (#14).  Measured as a step rather than
+    /// an absolute offset: every interior pair of courses steps sideways by
+    /// the same amount, so the seam pair must step by that same amount too.
+    /// `scale = 5, row_offset = 0.4` gives a product of 2 and always held;
+    /// `row_offset = 0.5` gives 2.5, used to jump by more than an eighth of a
+    /// brick, and now snaps to 3 — `row_offset = 0.6` — before a pixel is
+    /// drawn.
     #[test]
-    fn the_v_seam_bond_needs_an_integral_scale_row_offset_product() {
+    fn the_constructor_snaps_row_offset_so_the_v_seam_bond_holds() {
         let (w, h) = (640, 640);
         let scale = 5.0;
         let step = |row_offset: f64| {
@@ -396,18 +412,28 @@ mod tests {
             (interior, seam, period)
         };
 
-        let (interior, seam, period) = step(0.4);
-        let slack = period / 16;
-        assert!(
-            interior.abs_diff(seam) <= slack,
-            "product 2.0 should carry the bond across the seam: interior step {interior},              seam step {seam}, period {period}",
-        );
+        for row_offset in [0.4, 0.5] {
+            let (interior, seam, period) = step(row_offset);
+            let slack = period / 16;
+            assert!(
+                interior.abs_diff(seam) <= slack,
+                "row_offset {row_offset} should carry the bond across the seam: interior step \
+                 {interior}, seam step {seam}, period {period}",
+            );
+        }
 
-        let (interior, seam, period) = step(0.5);
-        assert!(
-            interior.abs_diff(seam) > period / 8,
-            "product 2.5 should visibly break the bond at the seam, but interior step              {interior} and seam step {seam} agree (period {period})",
-        );
+        // The snap is the fixup's, exactly: 0.5 at scale 5 lays what 0.6 lays.
+        let bake = |row_offset: f64| {
+            BrickGenerator::new(BrickConfig {
+                scale,
+                row_offset,
+                ..Default::default()
+            })
+            .generate(64, 64)
+            .expect("generate")
+            .albedo
+        };
+        assert_eq!(bake(0.5), bake(0.6));
     }
 
     #[test]

@@ -149,6 +149,7 @@ impl SurfaceCell for SolarPanelCell<'_> {
                 metallic: 0.0,
                 occlusion: 0.75,
                 emissive: [0.0, 0.0, 0.0],
+                alpha: 1.0,
             };
         }
 
@@ -190,6 +191,7 @@ impl SurfaceCell for SolarPanelCell<'_> {
             metallic: lerp(0.35, 0.85, w),
             occlusion: 1.0,
             emissive: [0.0, 0.0, 0.0],
+            alpha: 1.0,
         }
     }
 }
