@@ -463,6 +463,7 @@ macro_rules! for_each_texture_field {
             f64(grain_warp, "Grain Warp", 0.0, 1.0, 0.1),
             color3(color_wood_light, "Wood Light", 0.07),
             color3(color_wood_dark, "Wood Dark", 0.07),
+            nested(weathering, $crate::weathering::WeatheringConfig, weathering_config_editor, "plank_weather"),
             f32(normal_strength, "Normal Strength", 0.0, 8.0, 0.5) explore(0.5, 6.0),
         },
         $crate::shingle::ShingleConfig, "Shingle Config", shingle_config_editor, fixup snap_stagger {

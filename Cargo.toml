@@ -1,6 +1,6 @@
 [package]
 name = "symbios-texture"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 authors = ["Janus"]
 description = "Procedural texture generation core for bevy_symbios_texture."
@@ -19,3 +19,8 @@ symbios-genetics = "0.2"
 
 [dev-dependencies]
 serde_json = "1.0"
+
+# One place for crate-wide policy, applied to tests and benches too.
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

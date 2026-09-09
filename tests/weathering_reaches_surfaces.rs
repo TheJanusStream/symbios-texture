@@ -92,6 +92,7 @@ fn every_built_surface_can_age() {
         (marble, MarbleConfig, MarbleGenerator),
         (metal, MetalConfig, MetalGenerator),
         (pavers, PaversConfig, PaversGenerator),
+        (plank, PlankConfig, PlankGenerator),
         (shingle, ShingleConfig, ShingleGenerator),
         (stucco, StuccoConfig, StuccoGenerator),
         (thatch, ThatchConfig, ThatchGenerator),

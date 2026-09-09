@@ -9,7 +9,7 @@ LogEnd 5e6d8ecae55a0e09
 Ground cf539f8ef2a8d476
 Rock da2a80e594c210ae
 Brick 018180311da7a1c7
-Plank 3283d76ebda56d52
+Plank 7dafc0c8d7dff518
 Shingle b1ffbde6cdb8561d
 Stucco 6783a68859deaafc
 Concrete c0576f6d3d86a5bf

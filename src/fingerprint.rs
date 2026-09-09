@@ -29,6 +29,8 @@ use serde::ser::{self, Serialize};
 pub struct Fnv1a(u64);
 
 impl Fnv1a {
+    /// A hasher seeded with the FNV-1a 64-bit offset basis.
+    #[must_use]
     pub fn new() -> Self {
         Self(0xcbf2_9ce4_8422_2325)
     }

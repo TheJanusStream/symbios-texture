@@ -7,6 +7,7 @@
 
 use noise::{Fbm, MultiFractal, Perlin};
 
+use crate::math::smoothstep;
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{
@@ -182,16 +183,6 @@ impl SurfaceCell for GravelCell<'_> {
         }
     }
 }
-
-#[inline]
-fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
-    if edge1 <= edge0 {
-        return if x >= edge1 { 1.0 } else { 0.0 };
-    }
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 impl GravelGenerator {
     fn generate_inner(
         &self,

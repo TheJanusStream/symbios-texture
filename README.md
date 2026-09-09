@@ -142,12 +142,17 @@ implements [`TextureGenerator`].
   Every generator depicting a **built or dressed** surface carries a
   `weathering` block: ashlar, asphalt, brick, chitin, cobblestone,
   concrete, corrugated, enamel, encaustic, fabric, marble, metal,
-  obsidian, parquet, pavers, rock, shingle, solar panel, stucco, thatch,
-  truchet and wainscoting. Natural surfaces are deliberately excluded —
-  sand, snow, moss, bark and their kin already read as weathered, and a
-  second ageing pass over them fights the generator rather than helping
-  it. `plank` is the one gap: it still hand-rolls its pixel loop instead
-  of using the surface driver, so it needs porting before it can age.
+  obsidian, parquet, pavers, plank, rock, shingle, solar panel, stucco,
+  thatch, truchet and wainscoting. Natural surfaces are deliberately
+  excluded — sand, snow, moss, bark and their kin already read as
+  weathered, and a second ageing pass over them fights the generator
+  rather than helping it.
+
+  Eight modules still hand-roll a pixel loop rather than driving
+  `generate_surface`, so they cannot be handed a `WeatheringConfig`
+  without being ported first: `bark`, `chain_link`, `iron_grille`,
+  `leaf`, `log_end`, `stained_glass`, `twig` and `window`. Four of those
+  are built surfaces that would read better aged.
 - [`palette`](src/palette.rs) — `CosinePalette`, a four-vector colour ramp
   (`bias + amplitude·cos(2π(frequency·t + phase))`) for when one scalar has
   to drive a varied sweep of colour that a two-colour lerp flattens.

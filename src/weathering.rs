@@ -43,6 +43,7 @@
 
 use noise::{Fbm, MultiFractal, Perlin};
 
+use crate::math::smoothstep;
 use crate::{
     noise::{ToroidalNoise, normalize, sample_grid_into},
     surface::SurfaceField,
@@ -774,17 +775,6 @@ fn box_blur_wrapped(src: &[f64], w: usize, h: usize, radius: usize) -> Vec<f64> 
 
     out
 }
-
-/// Hermite smoothstep between two edges, clamped outside them.
-#[inline]
-fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
-    if edge1 <= edge0 {
-        return if x >= edge1 { 1.0 } else { 0.0 };
-    }
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 #[inline]
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t.clamp(0.0, 1.0)

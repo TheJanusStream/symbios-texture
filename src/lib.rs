@@ -66,6 +66,7 @@ pub mod leaf_sprite;
 pub mod lichen;
 pub mod log_end;
 pub mod marble;
+mod math;
 pub mod metal;
 pub mod moss;
 pub mod needle;

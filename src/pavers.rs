@@ -111,6 +111,8 @@ struct PaversCell<'a> {
     config: &'a PaversConfig,
     surf_grid: &'a [f64],
     bevel_r: f64,
+    /// Half the grout gap, as a fraction of the cell pitch.
+    grout_half: f64,
     /// Inner half-extents for the stone SDF (before bevel).
     hx: f64,
     hy: f64,
@@ -130,7 +132,7 @@ impl SurfaceCell for PaversCell<'_> {
             PaversLayout::Square => {
                 square_cell(u, v, self.cols, self.rows, self.hx, self.hy, self.bevel_r)
             }
-            PaversLayout::Hexagonal => hex_cell(u, v, c.scale),
+            PaversLayout::Hexagonal => hex_cell(u, v, c.scale, self.grout_half, self.bevel_r),
         };
 
         let (h_val, color) = if sdf_val < 0.0 {
@@ -182,6 +184,7 @@ impl PaversGenerator {
             config: c,
             surf_grid: &surf_grid,
             bevel_r,
+            grout_half,
             hx: (0.5 - grout_half - bevel_r).max(0.0),
             hy: (0.5 - grout_half - bevel_r).max(0.0),
             // At least one column, for the same reason as `brick`: a small
@@ -256,51 +259,70 @@ fn square_cell(
 /// Returns `(sdf, cell_id_q, cell_id_r)` for a flat-top hexagonal paver.
 ///
 /// Uses axial cube-rounding to find the nearest hex center, then IQ's hex SDF.
-/// `sdf < 0` inside stone, `sdf >= 0` in grout.
+/// `sdf < 0` inside stone, `sdf >= 0` in grout.  The returned pair is the
+/// cell's *canonical* id on the torus, not the raw axial pair — see
+/// "Cell identity" below.
 ///
 /// # Tiling
-/// A flat-top hex grid has an intrinsic aspect ratio of `sqrt(3)/1.5 ≈ 1.1547`.
-/// There is no integer pair `(cols, rows)` that satisfies both horizontal and
-/// vertical tiling on a square exactly.  We fix the horizontal period to
-/// `1/scale` (exact for integer `scale`), then round the float row count to
-/// the nearest integer and stretch `v` by that correction factor so an integer
-/// number of rows fits in `[0, 1]`.  The hexes become very slightly non-regular
-/// (< ~8% distortion for scale ≥ 2), which is imperceptible in practice.
-fn hex_cell(u: f64, v: f64, scale: f64) -> (f64, i64, i64) {
+/// A flat-top hex lattice of circumradius `hex_r` steps `1.5 * hex_r` across
+/// and `sqrt(3) * hex_r` down.  Fixing `hex_r = 1 / (rows * sqrt(3))` puts
+/// exactly `rows` rows in `[0, 1]`, so V tiles by construction.  U needs an
+/// integer column count, and it has to be an **even** one: stepping a whole
+/// tile sideways maps `(q, r)` to `(q + cols, r - cols / 2)`, which is a
+/// lattice vector only when `cols` is even.  So the natural float count
+/// `rows * sqrt(3) / 1.5` is rounded to the nearest even integer and `u` is
+/// scaled by it directly.  That leaves the hexes slightly non-regular — at
+/// worst 15.5% wide (at `scale = 3`), 13.4% narrow (at `scale = 2`, `4`,
+/// `6`) — which is imperceptible next to the seam it buys.
+///
+/// # Cell identity
+/// Raw `(q, r)` is not a cell's identity on a torus: `u + 1` shifts it by
+/// `(cols, -cols / 2)` and `v + 1` by `(0, rows)`.  Reducing by both periods
+/// gives one representative per cell, so a paver cut in half by the tile's
+/// own edge hashes once and draws one colour instead of two.
+fn hex_cell(u: f64, v: f64, scale: f64, grout_half: f64, bevel_r: f64) -> (f64, i64, i64) {
     const SQRT3: f64 = 1.732_050_807_568_877_3;
 
     // Vertical tiling requires an integer number of rows; round scale.
-    let scale = scale.round().max(1.0);
-    // Circumradius so that `scale` hex rows fit exactly across [0, 1] vertically.
-    // Row spacing = hex_r * √3, so scale rows require hex_r = 1 / (scale * √3).
-    let hex_r = 1.0 / (scale * SQRT3);
+    let rows = scale.round().max(1.0);
+    // Circumradius so that `rows` hex rows fit exactly across [0, 1].
+    let hex_r = 1.0 / (rows * SQRT3);
+    // Column count: the natural float value is `1 / (1.5 * hex_r)`, rounded
+    // to the nearest even integer for the reason in the tiling note above.
+    let cols = ((rows * SQRT3 / 1.5) * 0.5).round().max(1.0) * 2.0;
 
-    // The natural (float) number of horizontal columns in [0,1].
-    // Column spacing = 1.5 * hex_r, so cols = 1 / (1.5 * hex_r) = scale * √3 / 1.5.
-    // This is generally not an integer, so stretch u to make it tile.
-    let cols_float = scale * SQRT3 / 1.5;
-    let cols_int = cols_float.round().max(1.0);
-    // Stretch u so that cols_int hex columns span [0, 1] exactly.
-    let us = u * (cols_float / cols_int);
-
-    // Convert to fractional axial coordinates (flat-top convention).
-    let qf = (2.0 / 3.0) * us / hex_r;
-    let rf = (-1.0 / 3.0) * us / hex_r + (SQRT3 / 3.0) * v / hex_r;
+    // Fractional axial coordinates (flat-top convention), written in terms of
+    // the row and column counts rather than through `hex_r`.  A whole-tile
+    // step then moves them by exactly `cols` and `-cols / 2`, both integers,
+    // which is what makes the seam identities hold bit for bit.
+    let qf = u * cols;
+    let rf = v * rows - 0.5 * qf;
     let sf = -qf - rf;
 
-    // Cube-round to nearest hex center.
+    // Cube-round to the nearest hex center and keep the offset within the cell.
     let (q, r, _s) = cube_round(qf, rf, sf);
+    let (dq, dr) = (qf - q as f64, rf - r as f64);
 
-    // Center of this hex in stretched UV space.
-    let cx = hex_r * 1.5 * q as f64;
-    let cy = hex_r * (SQRT3 / 2.0 * q as f64 + SQRT3 * r as f64);
+    // That offset in stretched UV space, where the SDF is evaluated (the hexes
+    // are slightly non-regular there, per the tiling note).
+    let dx = 1.5 * hex_r * dq;
+    let dy = SQRT3 * hex_r * (dr + 0.5 * dq);
 
-    // Evaluate the SDF in stretched space (hexes are slightly non-regular).
-    let dx = us - cx;
-    let dy = v - cy;
-    let sdf = hex_sdf(dx, dy, hex_r);
+    // The cell's own apothem is half the row pitch; `grout_half` and
+    // `bevel_r` are fractions of that pitch, exactly as `square_cell`
+    // takes them against a pitch of one.
+    let pitch = SQRT3 * hex_r;
+    let bevel = bevel_r * pitch;
+    let stone = (pitch * (0.5 - grout_half) - bevel).max(0.0);
+    let sdf = hex_sdf(dx, dy, stone) - bevel;
 
-    (sdf, q, r)
+    // Canonical cell id: undo `n` whole-tile steps in U, then reduce V.
+    let (cols_i, rows_i) = (cols as i64, rows as i64);
+    let n = q.div_euclid(cols_i);
+    let cell_q = q.rem_euclid(cols_i);
+    let cell_r = (r + n * (cols_i / 2)).rem_euclid(rows_i);
+
+    (sdf, cell_q, cell_r)
 }
 
 /// Cube-coordinate rounding (standard hex-grid algorithm).
@@ -323,8 +345,9 @@ fn cube_round(qf: f64, rf: f64, sf: f64) -> (i64, i64, i64) {
 
 /// IQ's flat-top hexagon SDF.
 ///
-/// `r` is the circumradius (center → vertex).  Returns negative inside,
-/// positive outside.
+/// `r` is the **apothem** (center → edge midpoint), so the hexagon is `2 * r`
+/// tall and `4 * r / sqrt(3)` wide.  Returns negative inside, positive
+/// outside.
 #[inline]
 fn hex_sdf(mut px: f64, mut py: f64, r: f64) -> f64 {
     // k = (-sqrt(3)/2, 0.5, 1/sqrt(3))
@@ -353,4 +376,224 @@ fn cell_hash(bu: i64, bv: i64, seed: u32) -> f64 {
     h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
     h ^= h >> 33;
     (h as f64) * (1.0 / u64::MAX as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::generator::{TextureGenerator, linear_to_srgb};
+
+    fn albedo_at(map: &TextureMap, width: u32, x: usize, y: usize) -> [u8; 3] {
+        let i = (y * width as usize + x) * 4;
+        [map.albedo[i], map.albedo[i + 1], map.albedo[i + 2]]
+    }
+
+    /// `v` values to sweep a seam over: texel centres of a 2048-tall tile.
+    ///
+    /// Centres rather than corners on purpose.  Cube-rounding is ambiguous
+    /// wherever a fractional axial coordinate lands exactly on `n + 0.5` —
+    /// the sample sits on the boundary between two cells and either is a
+    /// correct answer — and `rf = v * scale` hits that for corner sampling
+    /// (`v = i / 2048`) at, for example, `scale = 8, v = 0.0625`.  With
+    /// `v = (i + 0.5) / 2048` it cannot: `(2i + 1) * scale = 2048 * (2n + 1)`
+    /// has no solution for any `scale` below 2048, because the left side
+    /// carries at most as many factors of two as `scale` does and the right
+    /// side carries eleven.  So every sample below is unambiguous, and the
+    /// seam identities hold *bit for bit* rather than to a tolerance.
+    const SEAM_SWEEP: u32 = 2048;
+
+    /// [`hex_cell`] at the default config's grout and bevel, derived the
+    /// way `generate_inner` derives them.
+    fn hex_at(u: f64, v: f64, scale: f64) -> (f64, i64, i64) {
+        let c = PaversConfig::default();
+        let grout_half = (c.grout_width * 0.5).clamp(0.0, 0.45);
+        hex_cell(u, v, scale, grout_half, (c.bevel * grout_half).max(0.0))
+    }
+
+    fn seam_vs() -> impl Iterator<Item = f64> {
+        (0..SEAM_SWEEP).map(|i| (f64::from(i) + 0.5) / f64::from(SEAM_SWEEP))
+    }
+
+    /// A tiling generator must agree at `u = 0` and `u = 1`: they are the same
+    /// point of the repeating pattern, one tile apart.  Both halves of the cell
+    /// answer have to agree — the SDF, or the stone's outline steps at the
+    /// join, and the cell id, or its colour does.
+    ///
+    /// Before the fix only `scale = 3` agreed, and by coincidence: the `u`
+    /// stretch was inverted, which happens to land on four columns there.
+    /// Measured worst `|sdf(0, v) - sdf(1, v)|`, as a fraction of `hex_r`:
+    /// scale 3 → 0%, scale 4 → 35%, scale 5 → 58%, scale 6 → 87%, scale 8 →
+    /// 67%.
+    #[test]
+    fn a_hex_paver_tile_is_periodic_in_u() {
+        for scale in 1..=16 {
+            let scale = f64::from(scale);
+            for v in seam_vs() {
+                let (sdf_l, q_l, r_l) = hex_at(0.0, v, scale);
+                let (sdf_r, q_r, r_r) = hex_at(1.0, v, scale);
+                assert_eq!(
+                    sdf_l, sdf_r,
+                    "scale {scale}: the hex SDF steps across the U seam at v = {v}",
+                );
+                assert_eq!(
+                    (q_l, r_l),
+                    (q_r, r_r),
+                    "scale {scale}: the hex cell id changes across the U seam at v = {v}, \
+                     so a paver straddling it draws two colours",
+                );
+            }
+        }
+    }
+
+    /// The same statement for the other axis.  The geometry always tiled in V
+    /// — the row spacing is `1 / scale` by construction — but the cell id did
+    /// not: `r` steps by `scale` across the V seam and was hashed raw, so a
+    /// paver straddling the top edge drew one colour above and another below.
+    #[test]
+    fn a_hex_paver_tile_is_periodic_in_v() {
+        for scale in 1..=16 {
+            let scale = f64::from(scale);
+            for u in seam_vs() {
+                let (sdf_t, q_t, r_t) = hex_at(u, 0.0, scale);
+                let (sdf_b, q_b, r_b) = hex_at(u, 1.0, scale);
+                assert_eq!(
+                    sdf_t, sdf_b,
+                    "scale {scale}: the hex SDF steps across the V seam at u = {u}",
+                );
+                if sdf_t < 0.0 {
+                    assert_eq!(
+                        (q_t, r_t),
+                        (q_b, r_b),
+                        "scale {scale}: the hex cell id changes across the V seam at u = {u}",
+                    );
+                }
+            }
+        }
+    }
+
+    /// Periodicity as a property of the whole function, not just of the two
+    /// seam lines: shifting `u` by one tile must land on the same sample.
+    /// This is what stops a fix that special-cases the edges.
+    #[test]
+    fn shifting_u_by_a_whole_tile_changes_nothing() {
+        for scale in 1..=16 {
+            let scale = f64::from(scale);
+            for i in 0..257 {
+                let u = f64::from(i) * 0.003_571;
+                for j in 0..64 {
+                    let v = (f64::from(j) + 0.5) / 64.0;
+                    let (sdf_a, q_a, r_a) = hex_at(u, v, scale);
+                    let (sdf_b, q_b, r_b) = hex_at(u + 1.0, v, scale);
+                    assert!(
+                        (sdf_a - sdf_b).abs() < 1e-12,
+                        "scale {scale}: sdf({u}, {v}) = {sdf_a} but sdf({}, {v}) = {sdf_b}",
+                        u + 1.0,
+                    );
+                    if sdf_a < 0.0 {
+                        assert_eq!(
+                            (q_a, r_a),
+                            (q_b, r_b),
+                            "scale {scale}: the cell id at ({u}, {v}) is not the cell id one \
+                             tile over",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The pixel-level statement of the same defect, in the shape of
+    /// `brick::a_brick_straddling_the_u_seam_is_one_colour`.
+    ///
+    /// Column `q = 0` is centred on `u = 0`, so at `scale = 6` the paver whose
+    /// centre row is `v = 0.5` is cut in half by the tile's own edge: its right
+    /// half draws at `x = 0` and its left half at `x = width - 1`.  Albedo is
+    /// flat within a paver — the only term is the per-cell hash — so the two
+    /// columns must read the same byte triple.
+    #[test]
+    fn a_hex_paver_straddling_the_u_seam_is_one_colour() {
+        let cfg = PaversConfig {
+            scale: 6.0,
+            layout: PaversLayout::Hexagonal,
+            // Loud jitter so a wrong cell id cannot pass by luck.
+            cell_variance: 0.6,
+            roughness: 0.0,
+            ..Default::default()
+        };
+        let (w, h) = (256, 256);
+        let map = PaversGenerator::new(cfg).generate(w, h).expect("generate");
+        let y = h as usize / 2; // v = 0.5, the centre row of column 0
+        assert_eq!(
+            albedo_at(&map, w, 0, y),
+            albedo_at(&map, w, w as usize - 1, y),
+            "the two halves of the seam-straddling paver drew different colours",
+        );
+    }
+
+    /// The fraction of pixels that drew the grout colour, which is flat: the
+    /// joint takes `color_grout` unmodified, so an exact byte match counts it.
+    fn grout_fraction(layout: PaversLayout, grout_width: f64) -> f64 {
+        let cfg = PaversConfig {
+            scale: 5.0,
+            layout,
+            grout_width,
+            // Corner rounding would add stone area back and blur the
+            // comparison; the question here is the extent, not the corner.
+            bevel: 0.0,
+            ..PaversConfig::default()
+        };
+        let joint = cfg.color_grout.map(linear_to_srgb);
+        let (w, h) = (256, 256);
+        let map = PaversGenerator::new(cfg).generate(w, h).expect("generate");
+        let hits = (0..h as usize)
+            .flat_map(|y| (0..w as usize).map(move |x| (x, y)))
+            .filter(|&(x, y)| albedo_at(&map, w, x, y) == joint)
+            .count();
+        hits as f64 / f64::from(w * h)
+    }
+
+    /// `grout_width` has to open a joint on *both* layouts, and the same one.
+    ///
+    /// The hexagonal path takes `grout_half` and `bevel_r` as fractions of the
+    /// cell pitch exactly as [`square_cell`] does, so a stone of linear extent
+    /// `1 - grout_width` covers `(1 - grout_width)²` of its cell whatever the
+    /// cell's shape — the two layouts must land on the same area fraction, and
+    /// on the closed form.
+    ///
+    /// Before the fix the hexagonal layout drew no grout at all, at any width:
+    /// [`hex_sdf`] takes the apothem and `hex_cell` handed it the circumradius,
+    /// so the drawn hexagon strictly contained its own cell and every sample
+    /// came out inside the stone.  Measured over a 512² grid, the grout pixel
+    /// count was 0.0000% at scales 3, 4, 5, 6 and 8, and the largest SDF value
+    /// anywhere was −0.0097 — there was no zero crossing to find (#17).
+    #[test]
+    fn grout_width_opens_the_same_joint_on_both_layouts() {
+        assert!(
+            grout_fraction(PaversLayout::Hexagonal, 0.0) < 0.01,
+            "a zero-width joint should leave no grout",
+        );
+
+        let mut previous = 0.0;
+        for width in [0.05, 0.1, 0.2, 0.3] {
+            let hex = grout_fraction(PaversLayout::Hexagonal, width);
+            let square = grout_fraction(PaversLayout::Square, width);
+            let expected = 1.0 - (1.0 - width) * (1.0 - width);
+            assert!(
+                (hex - expected).abs() < 0.02,
+                "grout_width {width} should open {expected:.3} of the tile on hexagons, \
+                 not {hex:.3}",
+            );
+            assert!(
+                (hex - square).abs() < 0.02,
+                "grout_width {width} opens {hex:.3} of a hexagonal tile but {square:.3} of \
+                 a square one; the two layouts disagree about what the width means",
+            );
+            assert!(
+                hex > previous,
+                "a wider joint should draw more grout, but {width} gave {hex:.3} after \
+                 {previous:.3}",
+            );
+            previous = hex;
+        }
+    }
 }

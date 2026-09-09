@@ -16,10 +16,10 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin, Worley};
 use rayon::prelude::*;
 
 use crate::{
-    generator::{TextureError, TextureGenerator, TextureMap, linear_to_srgb, validate_dimensions},
+    generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, normalize},
-    normal::{BoundaryMode, height_to_normal},
-    surface::lerp,
+    surface::{SurfaceCell, SurfaceSample, generate_surface_weathered, lerp},
+    weathering::WeatheringConfig,
 };
 
 /// Configures the appearance of a [`PlankGenerator`].
@@ -44,6 +44,13 @@ pub struct PlankConfig {
     pub color_wood_light: [f32; 3],
     /// Dark wood colour in linear RGB \[0, 1\].
     pub color_wood_dark: [f32; 3],
+    /// Optional ageing pass — wear on exposed edges, grime in the
+    /// recesses, corrosion and run-off streaks.
+    ///
+    /// Defaults to disabled, so the surface is unchanged until a layer
+    /// is turned up.
+    #[serde(default)]
+    pub weathering: WeatheringConfig,
     /// Normal-map strength.
     pub normal_strength: f32,
 }
@@ -60,6 +67,7 @@ impl Default for PlankConfig {
             grain_warp: 0.35,
             color_wood_light: [0.72, 0.52, 0.30],
             color_wood_dark: [0.42, 0.26, 0.12],
+            weathering: WeatheringConfig::default(),
             normal_strength: 2.5,
         }
     }
@@ -98,170 +106,204 @@ impl PlankGenerator {
     }
 }
 
-impl TextureGenerator for PlankGenerator {
-    fn generate(&self, width: u32, height: u32) -> Result<TextureMap, TextureError> {
+/// Everything in the plank sampler that depends only on the row.
+///
+/// The hand-rolled loop computed these once per `par_chunks_mut` row; the
+/// shared driver samples per texel, so they are precomputed into a table
+/// rather than recomputed for every pixel of the row.
+struct PlankRow {
+    /// Per-plank de-correlation phase, so grain does not repeat board to board.
+    phase: f64,
+    /// Lateral shift of this plank's end-joints.
+    stagger_phase: f64,
+    /// This row falls in the gap at the top or bottom of a plank.
+    in_joint: bool,
+    /// Row torus coordinates for the low-frequency V half of the grain FBM.
+    g_nz: f64,
+    g_nw: f64,
+}
+
+/// Per-generation sampler: the noise objects, the knot grid and the row table.
+struct PlankCell<'a> {
+    config: &'a PlankConfig,
+    fbm_warp: &'a Fbm<Perlin>,
+    grain_noise: &'a ToroidalNoise<Fbm<Perlin>>,
+    knot_grid: &'a [f64],
+    rows: &'a [PlankRow],
+    /// Grain frequency along U — high, for long thin grain lines.
+    g_freq_u: f64,
+    width: usize,
+}
+
+impl SurfaceCell for PlankCell<'_> {
+    fn sample(&self, x: u32, y: u32, u: f64, v: f64) -> SurfaceSample {
+        let c = self.config;
+        let row = &self.rows[y as usize];
+
+        // Staggered end-joint.
+        let u_stagger = (u + row.stagger_phase).rem_euclid(1.0);
+        let stagger_frac = (u_stagger * 3.0).fract(); // ~3 short boards per plank
+        let in_end_joint = c.stagger > 0.01
+            && (stagger_frac < c.joint_width * 0.5 || stagger_frac > 1.0 - c.joint_width * 0.5);
+
+        if row.in_joint || in_end_joint {
+            // Joint / shadow line.
+            let jc = lerp3(c.color_wood_dark, [0.05, 0.03, 0.01], 0.5);
+            return SurfaceSample::matte(0.0, jc, JOINT_ROUGHNESS);
+        }
+
+        // Domain warp: low-freq FBM nudges grain coordinate.
+        let warp_u = self.fbm_warp.get([u * 2.0, v * 2.0]) * c.grain_warp * 0.08;
+
+        // Anisotropic grain: per-plank phase shift on U.
+        let u_grain = (u + row.phase * 0.7 + warp_u).rem_euclid(1.0);
+        let g_nx = (TAU * u_grain).cos() * self.g_freq_u;
+        let g_ny = (TAU * u_grain).sin() * self.g_freq_u;
+        let grain_raw = self
+            .grain_noise
+            .get_precomputed(g_nx, g_ny, row.g_nz, row.g_nw);
+        let grain_t = normalize(grain_raw); // [0, 1]
+
+        // Knot: Worley cell distance → circular depression.
+        let knot_raw = self.knot_grid[y as usize * self.width + x as usize];
+        // Invert: low distance = near knot centre = depression.
+        let knot_t = ((0.5 - knot_raw * 0.5) - (1.0 - c.knot_density))
+            .max(0.0)
+            .min(c.knot_density)
+            / c.knot_density.max(0.01);
+        let knot_depression = knot_t.powi(2);
+
+        // Height: grain + knot depression.
+        let h_val = (grain_t * (1.0 - knot_depression * 0.6)).clamp(0.0, 1.0);
+
+        // Colour: lerp light ↔ dark by grain, darken at knots.
+        let color_t = (grain_t as f32 - knot_depression as f32 * 0.4).clamp(0.0, 1.0);
+        let color = [
+            lerp(c.color_wood_dark[0], c.color_wood_light[0], color_t),
+            lerp(c.color_wood_dark[1], c.color_wood_light[1], color_t),
+            lerp(c.color_wood_dark[2], c.color_wood_light[2], color_t),
+        ];
+
+        // ORM: knots and dark grain are rougher.
+        SurfaceSample::matte(h_val, color, 0.50 + (1.0 - color_t) * 0.35)
+    }
+}
+
+impl PlankGenerator {
+    /// The Worley grid the knots read, one value per texel.
+    ///
+    /// `noise::Worley` holds an `Rc` and is `!Sync`, so each parallel row
+    /// constructs its own instance — deterministic from the seed and only a
+    /// few microseconds each.
+    fn knot_grid(&self, w: usize, h: usize, plank_count: f64) -> Vec<f64> {
+        let c = &self.config;
+        let freq = plank_count * 1.5;
+        let col_cos: Vec<f64> = (0..w)
+            .map(|x| (TAU * x as f64 / w as f64).cos() * freq)
+            .collect();
+        let col_sin: Vec<f64> = (0..w)
+            .map(|x| (TAU * x as f64 / w as f64).sin() * freq)
+            .collect();
+        let row_cos: Vec<f64> = (0..h)
+            .map(|y| (TAU * y as f64 / h as f64).cos() * freq)
+            .collect();
+        let row_sin: Vec<f64> = (0..h)
+            .map(|y| (TAU * y as f64 / h as f64).sin() * freq)
+            .collect();
+        let mut grid = vec![0.0f64; w * h];
+        grid.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            let worley =
+                Worley::new(c.seed.wrapping_add(200)).set_return_type(ReturnType::Distance);
+            let knot_noise = ToroidalNoise::new(worley, freq);
+            for (x, slot) in row.iter_mut().enumerate() {
+                *slot = knot_noise.get_precomputed(col_cos[x], col_sin[x], row_cos[y], row_sin[y]);
+            }
+        });
+        grid
+    }
+
+    /// The per-row table — see [`PlankRow`].
+    fn rows(&self, h: usize, plank_count: f64, g_freq_v: f64) -> Vec<PlankRow> {
+        let c = &self.config;
+        let joint_half = c.joint_width * 0.5;
+        (0..h)
+            .map(|y| {
+                let v_scaled = y as f64 / h as f64 * plank_count;
+                let y_cell = v_scaled.floor() as i64;
+                let v_frac = v_scaled.fract();
+                let phase = cell_hash(y_cell, 0, c.seed);
+                // Grain drifts gently across the board, and per plank.
+                let v_grain = v_frac * 0.1 + phase * 0.3;
+                PlankRow {
+                    phase,
+                    stagger_phase: cell_hash(y_cell, 1, c.seed) * c.stagger,
+                    in_joint: v_frac < joint_half || v_frac > 1.0 - joint_half,
+                    g_nz: (TAU * v_grain).cos() * g_freq_v,
+                    g_nw: (TAU * v_grain).sin() * g_freq_v,
+                }
+            })
+            .collect()
+    }
+
+    fn generate_inner(
+        &self,
+        width: u32,
+        height: u32,
+        workspace: Option<&mut Workspace>,
+    ) -> Result<TextureMap, TextureError> {
         validate_dimensions(width, height)?;
         let c = &self.config;
 
         // plank_count must be an integer for the grid to tile vertically.
         let plank_count = c.plank_count.round();
+        let (w, h) = (width as usize, height as usize);
 
-        let w = width as usize;
-        let h = height as usize;
-        let n = w * h;
-
-        // Precompute knot Worley grid (isotropic, shared across planks).
-        // `noise::Worley` holds an `Rc` and is `!Sync`, so each parallel row
-        // constructs its own instance — deterministic from the seed and only
-        // a few microseconds each.
-        let knot_grid: Vec<f64> = {
-            let freq = plank_count * 1.5;
-            let col_cos: Vec<f64> = (0..w)
-                .map(|x| (TAU * x as f64 / w as f64).cos() * freq)
-                .collect();
-            let col_sin: Vec<f64> = (0..w)
-                .map(|x| (TAU * x as f64 / w as f64).sin() * freq)
-                .collect();
-            let row_cos: Vec<f64> = (0..h)
-                .map(|y| (TAU * y as f64 / h as f64).cos() * freq)
-                .collect();
-            let row_sin: Vec<f64> = (0..h)
-                .map(|y| (TAU * y as f64 / h as f64).sin() * freq)
-                .collect();
-            let mut grid = vec![0.0f64; n];
-            grid.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-                let worley =
-                    Worley::new(c.seed.wrapping_add(200)).set_return_type(ReturnType::Distance);
-                let knot_noise = ToroidalNoise::new(worley, freq);
-                for (x, slot) in row.iter_mut().enumerate() {
-                    *slot =
-                        knot_noise.get_precomputed(col_cos[x], col_sin[x], row_cos[y], row_sin[y]);
-                }
-            });
-            grid
+        let knot_grid = self.knot_grid(w, h, plank_count);
+        let rows = self.rows(h, plank_count, c.grain_scale * 0.08);
+        let cell = PlankCell {
+            config: c,
+            fbm_warp: &self.fbm_warp,
+            grain_noise: &self.grain_noise,
+            knot_grid: &knot_grid,
+            rows: &rows,
+            g_freq_u: c.grain_scale,
+            width: w,
         };
-
-        // Grain anisotropic frequencies.
-        let g_freq_u = c.grain_scale;
-        let g_freq_v = c.grain_scale * 0.08; // very low V — long grain lines
-
-        let mut heights = vec![0.0f64; n];
-        let mut albedo = vec![0u8; n * 4];
-        let mut roughness_buf = vec![0u8; n * 4];
-
-        heights
-            .par_chunks_mut(w)
-            .zip(albedo.par_chunks_mut(w * 4))
-            .zip(roughness_buf.par_chunks_mut(w * 4))
-            .enumerate()
-            .for_each(|(y, ((height_row, albedo_row), orm_row))| {
-                let v = y as f64 / h as f64;
-                let v_scaled = v * plank_count;
-                let y_cell = v_scaled.floor() as i64;
-                let v_frac = v_scaled.fract();
-
-                // Per-plank de-correlation phase and stagger.
-                let row_phase = cell_hash(y_cell, 0, c.seed);
-                let stagger_phase = cell_hash(y_cell, 1, c.seed) * c.stagger;
-
-                // Joint gap at top and bottom of each plank.
-                let joint_half = c.joint_width * 0.5;
-                let in_joint = v_frac < joint_half || v_frac > 1.0 - joint_half;
-
-                // Precompute row torus coords for grain (V direction, low freq).
-                let v_grain = v_frac * 0.1 + row_phase * 0.3; // gently warped per plank
-                let g_nz = (TAU * v_grain).cos() * g_freq_v;
-                let g_nw = (TAU * v_grain).sin() * g_freq_v;
-
-                for (x, height_slot) in height_row.iter_mut().enumerate() {
-                    let u = x as f64 / w as f64;
-
-                    // Staggered end-joint.
-                    let u_stagger = (u + stagger_phase).rem_euclid(1.0);
-                    let stagger_frac = (u_stagger * 3.0).fract(); // ~3 short boards per plank
-                    let in_end_joint = c.stagger > 0.01
-                        && (stagger_frac < c.joint_width * 0.5
-                            || stagger_frac > 1.0 - c.joint_width * 0.5);
-
-                    let ai = x * 4;
-
-                    if in_joint || in_end_joint {
-                        // Joint / shadow line.
-                        *height_slot = 0.0;
-                        let jc = lerp3(c.color_wood_dark, [0.05, 0.03, 0.01], 0.5);
-                        albedo_row[ai] = linear_to_srgb(jc[0]);
-                        albedo_row[ai + 1] = linear_to_srgb(jc[1]);
-                        albedo_row[ai + 2] = linear_to_srgb(jc[2]);
-                        albedo_row[ai + 3] = 255;
-                        orm_row[ai] = 255;
-                        orm_row[ai + 1] = (0.92 * 255.0) as u8;
-                        orm_row[ai + 2] = 0;
-                        orm_row[ai + 3] = 255;
-                        continue;
-                    }
-
-                    // Domain warp: low-freq FBM nudges grain coordinate.
-                    let warp_u = self.fbm_warp.get([u * 2.0, v * 2.0]) * c.grain_warp * 0.08;
-
-                    // Anisotropic grain: per-plank phase shift on U.
-                    let u_grain = (u + row_phase * 0.7 + warp_u).rem_euclid(1.0);
-                    let g_nx = (TAU * u_grain).cos() * g_freq_u;
-                    let g_ny = (TAU * u_grain).sin() * g_freq_u;
-                    let grain_raw = self.grain_noise.get_precomputed(g_nx, g_ny, g_nz, g_nw);
-                    let grain_t = normalize(grain_raw); // [0, 1]
-
-                    // Knot: Worley cell distance → circular depression.
-                    let knot_raw = knot_grid[y * w + x];
-                    // Invert: low distance = near knot centre = depression.
-                    let knot_t = ((0.5 - knot_raw * 0.5) - (1.0 - c.knot_density))
-                        .max(0.0)
-                        .min(c.knot_density)
-                        / c.knot_density.max(0.01);
-                    let knot_depression = knot_t.powi(2);
-
-                    // Height: grain + knot depression.
-                    let h_val = (grain_t * (1.0 - knot_depression * 0.6)).clamp(0.0, 1.0);
-                    *height_slot = h_val;
-
-                    // Colour: lerp light ↔ dark by grain, darken at knots.
-                    let color_t = (grain_t as f32 - knot_depression as f32 * 0.4).clamp(0.0, 1.0);
-                    let r = lerp(c.color_wood_dark[0], c.color_wood_light[0], color_t);
-                    let gr = lerp(c.color_wood_dark[1], c.color_wood_light[1], color_t);
-                    let b = lerp(c.color_wood_dark[2], c.color_wood_light[2], color_t);
-
-                    albedo_row[ai] = linear_to_srgb(r);
-                    albedo_row[ai + 1] = linear_to_srgb(gr);
-                    albedo_row[ai + 2] = linear_to_srgb(b);
-                    albedo_row[ai + 3] = 255;
-
-                    // ORM: knots and dark grain are rougher.
-                    let rough = 0.50 + (1.0 - color_t) * 0.35;
-                    orm_row[ai] = 255;
-                    orm_row[ai + 1] = (rough * 255.0).round() as u8;
-                    orm_row[ai + 2] = 0;
-                    orm_row[ai + 3] = 255;
-                }
-            });
-
-        let normal = height_to_normal(
-            &heights,
+        generate_surface_weathered(
             width,
             height,
             c.normal_strength,
-            BoundaryMode::Wrap,
-        );
-
-        Ok(TextureMap {
-            albedo,
-            normal,
-            roughness: roughness_buf,
-            width,
-            height,
-            mip_level_count: 1,
-            emissive: None,
-        })
+            workspace,
+            &cell,
+            &c.weathering,
+        )
     }
 }
+
+impl TextureGenerator for PlankGenerator {
+    fn generate(&self, width: u32, height: u32) -> Result<TextureMap, TextureError> {
+        self.generate_inner(width, height, None)
+    }
+
+    fn generate_with_workspace(
+        &self,
+        width: u32,
+        height: u32,
+        workspace: &mut Workspace,
+    ) -> Result<TextureMap, TextureError> {
+        self.generate_inner(width, height, Some(workspace))
+    }
+}
+
+/// Roughness of a joint pixel, as the byte the hand-rolled loop wrote.
+///
+/// That loop packed the joint with `(0.92 * 255.0) as u8`, which **truncates**
+/// 234.6 to 234, where [`crate::surface::generate_surface`] rounds every ORM channel — 0.92
+/// through the driver would pack 235.  Naming the byte instead of the intent
+/// keeps the port provably free of visual change, which is what
+/// `plank_output_is_byte_stable` is there to guard.  Harmonising it with the
+/// other generators is #18.
+const JOINT_ROUGHNESS: f32 = 234.0 / 255.0;
 
 // --- helpers ----------------------------------------------------------------
 

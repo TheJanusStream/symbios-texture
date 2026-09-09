@@ -41,6 +41,7 @@
 //! [`StripeProfile`] reshapes the wave, and a caller-supplied warp bends
 //! straight bands into flowing grain.
 
+use crate::math::smoothstep;
 use noise::NoiseFn;
 use rayon::prelude::*;
 use std::f64::consts::TAU;
@@ -769,17 +770,6 @@ pub fn stripe(u: f64, v: f64, params: StripeParams, warp_turns: f64) -> f64 {
     let phase = params.cycles_u as f64 * u + params.cycles_v as f64 * v + warp_turns;
     params.profile.shape(phase, params.sharpness)
 }
-
-/// Hermite smoothstep between two edges, clamped outside them.
-#[inline]
-fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
-    if edge1 <= edge0 {
-        return if x >= edge1 { 1.0 } else { 0.0 };
-    }
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 /// Deterministic integer hash → \[0, 1\].  Drives Voronoi site jitter and
 /// per-cell variance for the cell-decomposition generators.
 ///
