@@ -213,8 +213,8 @@ mod tests {
         for_each_texture_field!(check_rows);
 
         assert_eq!(
-            checked, 585,
-            "585 numeric rows: 272 f64 + 126 color3 + 97 f32 + 67 usize + 23 f64_round. \
+            checked, 629,
+            "629 numeric rows: 295 f64 + 138 color3 + 101 f32 + 69 usize + 26 f64_round. \
              A row that stopped being checked means an arm matched the wrong kind."
         );
     }
@@ -295,6 +295,6 @@ mod tests {
     /// Every config in the registry reaches the assertions above.
     #[test]
     fn every_config_has_an_envelope() {
-        assert_eq!(every_config_clamped_twice().len(), 62);
+        assert_eq!(every_config_clamped_twice().len(), 66);
     }
 }

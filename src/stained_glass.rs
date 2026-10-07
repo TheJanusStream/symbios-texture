@@ -17,6 +17,7 @@
 
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
+use crate::math::cell_hash;
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     surface::{SurfaceCell, SurfaceOptions, SurfaceSample, generate_surface_with},
@@ -280,15 +281,4 @@ fn hsv_to_rgb(h: f64, s: f64, v: f64) -> [f32; 3] {
         _ => (v, p, q),
     };
     [r as f32, g as f32, b as f32]
-}
-
-/// Deterministic integer cell hash → `[0, 1]`.
-fn cell_hash(bx: i64, by: i64, seed: u32) -> f64 {
-    let mut h = seed as u64;
-    h ^= (bx as u64).wrapping_mul(6_364_136_223_846_793_005);
-    h ^= (by as u64).wrapping_mul(1_442_695_040_888_963_407);
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    h ^= h >> 33;
-    (h as f64) * (1.0 / u64::MAX as f64)
 }

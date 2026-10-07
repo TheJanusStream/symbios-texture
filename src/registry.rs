@@ -109,6 +109,10 @@ macro_rules! for_each_generator {
             (Reed, reed, $crate::reed::ReedConfig, $crate::reed::ReedGenerator, Card),
             (Needle, needle, $crate::needle::NeedleConfig, $crate::needle::NeedleGenerator, Card),
             (Broadleaf, broadleaf, $crate::broadleaf::BroadleafConfig, $crate::broadleaf::BroadleafGenerator, Card),
+            (RoofTile, roof_tile, $crate::roof_tile::RoofTileConfig, $crate::roof_tile::RoofTileGenerator, Surface),
+            (LogWall, log_wall, $crate::log_wall::LogWallConfig, $crate::log_wall::LogWallGenerator, Surface),
+            (DryStone, dry_stone, $crate::dry_stone::DryStoneConfig, $crate::dry_stone::DryStoneGenerator, Surface),
+            (Fur, fur, $crate::fur::FurConfig, $crate::fur::FurGenerator, Surface),
         }
     };
 }
@@ -160,8 +164,9 @@ macro_rules! for_each_generator {
 /// Some fields have a band the genetic operators should stay inside even
 /// though a person may legitimately author outside it: a mortar width of zero
 /// is a wall someone might want, and a random walk that finds it is a wasted
-/// search. Without the clause the search uses the envelope. Fifty rows carry
-/// one; thirty-two of those are a `normal_strength` floor.
+/// search. Without the clause the search uses the envelope. Over half of the
+/// rows that carry one are on `normal_strength`: a floor on most of them (a
+/// surface searched flat is a wasted search) and a ceiling on some.
 ///
 /// **Row order is behaviour, not layout.** `mutate` draws once per field in
 /// this order, so moving a row gives every seeded search a different
@@ -470,7 +475,7 @@ macro_rules! for_each_texture_field {
         $crate::shingle::ShingleConfig, "Shingle Config", shingle_config_editor, fixup snap_stagger {
             seed(seed, "Seed"),
             f64_round(scale, "Scale (Rows)", 2.0, 16.0, 1.0) explore(2.0, 12.0),
-            f64(shape_profile, "Shape (Square→Scallop)", 0.0, 1.0, 0.2),
+            f64(shape_profile, "Shape (Square to Scallop)", 0.0, 1.0, 0.2),
             f64(overlap, "Overlap", 0.0, 0.8, 0.1),
             f64(stagger, "Stagger", 0.0, 1.0, 0.15),
             f64(moss_level, "Moss", 0.0, 1.0, 0.1),
@@ -1016,6 +1021,65 @@ macro_rules! for_each_texture_field {
         } layout {
             seed, variant_rows, variant_cols, shape_jitter, tint_jitter, leaf,
         },
+        $crate::roof_tile::RoofTileConfig, "Roof Tile Config", roof_tile_config_editor {
+            seed(seed, "Seed"),
+            f64_round(columns, "Columns", 2.0, 16.0, 1.0) explore(3.0, 12.0),
+            f64_round(courses, "Courses", 2.0, 16.0, 1.0) explore(3.0, 12.0),
+            f64(barrel, "Profile (Pan to Barrel)", 0.0, 1.0, 0.15),
+            f64(course_step, "Course Step", 0.0, 1.0, 0.1),
+            f64(stagger, "Stagger", 0.0, 1.0, 0.15),
+            f64(cell_variance, "Tile Variance", 0.0, 1.0, 0.1),
+            f64(glaze, "Glaze", 0.0, 1.0, 0.1),
+            f64(moss_level, "Moss", 0.0, 1.0, 0.1),
+            color3(color_tile, "Tile Color", 0.07),
+            color3(color_shadow, "Shadow Color", 0.05),
+            nested(weathering, $crate::weathering::WeatheringConfig, weathering_config_editor, "roof_tile_weather"),
+            f32(normal_strength, "Normal Strength", 0.0, 8.0, 0.5) explore(0.5, 8.0),
+        },
+        $crate::log_wall::LogWallConfig, "Log Wall Config", log_wall_config_editor {
+            seed(seed, "Seed"),
+            f64_round(log_count, "Logs", 2.0, 12.0, 1.0),
+            f64(chinking_width, "Chinking Width", 0.0, 0.4, 0.04),
+            f64(log_variance, "Log Variance", 0.0, 1.0, 0.1),
+            f64(bark, "Bark", 0.0, 1.0, 0.15),
+            f64(grain_scale, "Grain Scale", 2.0, 32.0, 2.0) explore(4.0, 24.0),
+            f64(crack_density, "Checks", 0.0, 1.0, 0.1),
+            color3(color_wood_light, "Wood Light", 0.07),
+            color3(color_wood_dark, "Wood Dark", 0.07),
+            color3(color_bark, "Bark Color", 0.06),
+            color3(color_chinking, "Chinking Color", 0.07),
+            nested(weathering, $crate::weathering::WeatheringConfig, weathering_config_editor, "log_wall_weather"),
+            f32(normal_strength, "Normal Strength", 0.0, 8.0, 0.5) explore(1.0, 8.0),
+        },
+        $crate::dry_stone::DryStoneConfig, "Dry Stone Config", dry_stone_config_editor {
+            seed(seed, "Seed"),
+            usize(courses, "Courses", 3, 20),
+            usize(stones_per_course, "Stones per Course", 2, 12),
+            f64(course_jitter, "Course Jitter", 0.0, 1.0, 0.1),
+            f64(gap_width, "Gap Width", 0.0, 0.3, 0.03) explore(0.03, 0.25),
+            f64(irregularity, "Irregularity", 0.0, 1.0, 0.1),
+            f64(face_relief, "Face Relief", 0.0, 1.0, 0.1),
+            f64(cell_variance, "Stone Variance", 0.0, 1.0, 0.1),
+            f64(moss_level, "Lichen", 0.0, 1.0, 0.1),
+            color3(color_stone, "Stone Color", 0.07),
+            color3(color_stone_alt, "Second Stone Color", 0.07),
+            color3(color_gap, "Gap Color", 0.04),
+            nested(weathering, $crate::weathering::WeatheringConfig, weathering_config_editor, "dry_stone_weather"),
+            f32(normal_strength, "Normal Strength", 0.0, 8.0, 0.5) explore(0.5, 8.0),
+        },
+        $crate::fur::FurConfig, "Fur Config", fur_config_editor {
+            seed(seed, "Seed"),
+            f64(density, "Density", 8.0, 64.0, 4.0),
+            f64(length, "Length", 0.05, 1.0, 0.08),
+            f64(curl, "Curl", 0.0, 1.0, 0.1),
+            f64(clumping, "Clumping", 0.0, 1.0, 0.1),
+            f64(flow, "Flow", 0.0, 1.0, 0.1),
+            color3(color_root, "Root Color", 0.06),
+            color3(color_tip, "Tip Color", 0.07),
+            f64(patches, "Patches", 0.0, 1.0, 0.1),
+            color3(color_patch, "Patch Color", 0.07),
+            f32(normal_strength, "Normal Strength", 0.0, 8.0, 0.5) explore(0.5, 6.0),
+        },
         }
     };
 }
@@ -1025,3 +1089,97 @@ macro_rules! for_each_texture_field {
 // config editors from it, and an application generating a serialisation
 // mirror needs the same rows. Consumers that ignore the UI columns match
 // `label`, `editor_fn` and `"salt"` as opaque token trees.
+
+#[cfg(test)]
+mod tests {
+    /// Every word a config editor draws from this table - a row's label, a
+    /// panel's header, a layout's `text("...")` - is ASCII (#22). An editor
+    /// draws in its host's fonts, and a host's face may have no glyph for
+    /// anything else: `Shape (Square\u{2192}Scallop)` drew its arrow as an
+    /// empty box in the Overlands editors, which ship no symbol face.
+    #[test]
+    fn every_label_is_ascii() {
+        let mut drawn: Vec<(&'static str, &'static str)> = Vec::new();
+        macro_rules! collect {
+            (
+                $(
+                    $Config:ty, $header:literal, $editor:ident
+                    $(, fixup $fixup:ident )?
+                    { $( $kind:ident ( $field:ident $($rest:tt)* )
+                         $( explore ( $xlo:expr, $xhi:expr ) )? ),+ $(,)? }
+                    $( layout { $($layout:tt)* } )?
+                ),+ $(,)?
+            ) => {
+                $(
+                    drawn.push((stringify!($Config), $header));
+                    $( drawn.push((stringify!($Config), stringify!($($rest)*))); )+
+                    $( drawn.push((stringify!($Config), stringify!($($layout)*))); )?
+                )+
+            };
+        }
+        crate::for_each_texture_field!(collect);
+
+        assert!(
+            drawn.len() > 600,
+            "the table was walked: {} rows",
+            drawn.len()
+        );
+        for (config, text) in drawn {
+            let text = decode_unicode_escapes(text);
+            assert!(text.is_ascii(), "{config} draws a non-ASCII label: {text}");
+        }
+    }
+
+    /// `text` with each `\u{...}` escape it spells decoded to its char.
+    /// `stringify!` hands a literal back as written, so a label spelt with
+    /// an escape - `"A\u{2192}B"` - would otherwise read as plain ASCII and
+    /// pass. An escaped backslash (`\\u{`) is left as written.
+    fn decode_unicode_escapes(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            match chars.peek() {
+                Some('\\') => {
+                    out.push_str("\\\\");
+                    chars.next();
+                }
+                Some('u') => {
+                    let spelt: String = chars.clone().skip(1).take_while(|&d| d != '}').collect();
+                    let decoded = spelt
+                        .strip_prefix('{')
+                        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                        .and_then(char::from_u32);
+                    match decoded {
+                        Some(d) => {
+                            out.push(d);
+                            // 'u', the spelt digits with their '{', and '}'.
+                            for _ in 0..spelt.chars().count() + 2 {
+                                chars.next();
+                            }
+                        }
+                        None => out.push(c),
+                    }
+                }
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+
+    /// The decoder sees through an escape - the gap this guards: a label
+    /// spelt `"A\u{2192}B"` is the arrow the fonts lack, not ASCII.
+    #[test]
+    fn a_label_spelt_with_an_escape_is_read_decoded() {
+        let spelt = stringify!("A\u{2192}B");
+        assert!(
+            spelt.is_ascii(),
+            "fixture: stringify! keeps the escape as written"
+        );
+        assert_eq!(decode_unicode_escapes(spelt), "\"A\u{2192}B\"");
+        assert_eq!(decode_unicode_escapes(r"\\u{2192}"), r"\\u{2192}");
+    }
+}

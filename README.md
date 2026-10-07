@@ -11,11 +11,12 @@ crate, which re-exports this crate wholesale.
 
 ## What you get
 
-- **57 generators** covering building materials (brick, ashlar, plank,
-  stucco, metal, enamel, …), natural surfaces (rock, ground, sand, snow,
-  ice, lava, cracked earth, gravel, …), vegetation (bark, leaf, grass, moss,
-  lichen, cactus, forest floor, …), and particle sprites (spark, puff,
-  snowflake, flame, …).
+- **61 generators** covering building materials (brick, ashlar, plank,
+  stucco, metal, enamel, roof tile, log wall, dry stone, …), natural
+  surfaces (rock, ground, sand, snow, ice, lava, cracked earth, gravel, …),
+  vegetation (bark, leaf, grass, moss, lichen, cactus, forest floor, …),
+  animal coats (fur), and particle sprites (spark, puff, snowflake,
+  flame, …).
 - **Full PBR output**: every generator produces an albedo map (sRGB), a
   tangent-space normal map, and an ORM (occlusion/roughness/metallic) map;
   glowing materials (lava) add an emissive map. Optional CPU-side mipmap
@@ -107,11 +108,12 @@ wrapper crate consumes via the `for_each_generator!` macro. Two kinds:
 - **Card** — alpha-masked cutouts (foliage, windows, particles), meant for
   clamp-to-edge samplers; most can bake variant atlases.
 
-- **Surface** (35): ashlar, asphalt, bark, brick, cactus (skin), chitin,
-  cobblestone, concrete, corrugated, cracked earth, enamel, encaustic,
-  fabric, forest floor, gravel, ground, ice, lava, lichen, marble, metal,
-  moss, obsidian, parquet, pavers, plank, rock, sand, shingle, snow,
-  solar panel, stucco, thatch, truchet, wainscoting
+- **Surface** (39): ashlar, asphalt, bark, brick, cactus (skin), chitin,
+  cobblestone, concrete, corrugated, cracked earth, dry stone, enamel,
+  encaustic, fabric, forest floor, fur, gravel, ground, ice, lava, lichen,
+  log wall, marble, metal, moss, obsidian, parquet, pavers, plank, rock,
+  roof tile, sand, shingle, snow, solar panel, stucco, thatch, truchet,
+  wainscoting
 - **Card** (22): broadleaf, chain link, flame, flower, frond, grass tuft,
   iron grille, leaf, leaf sprite, log end, needle, petal, puff, reed, ring,
   shard, snowflake, soft disc, spark, stained glass, twig, window
@@ -144,15 +146,15 @@ implements [`TextureGenerator`].
 
   Every generator depicting a **built or dressed** surface carries a
   `weathering` block: ashlar, asphalt, brick, chain link, chitin,
-  cobblestone, concrete, corrugated, enamel, encaustic, fabric, iron
-  grille, marble, metal, obsidian, parquet, pavers, plank, rock, shingle,
-  solar panel, stained glass, stucco, thatch, truchet, wainscoting and
-  window. The four alpha cards among them bake through the same driver
+  cobblestone, concrete, corrugated, dry stone, enamel, encaustic, fabric,
+  iron grille, log wall, marble, metal, obsidian, parquet, pavers, plank,
+  rock, roof tile, shingle, solar panel, stained glass, stucco, thatch,
+  truchet, wainscoting and window. The four alpha cards among them bake through the same driver
   with `SurfaceOptions::card`, and weathering reads their transparent
   texels without writing them. Natural surfaces are deliberately
   excluded — sand, snow, moss, bark and their kin already read as
   weathered, and a second ageing pass over them fights the generator
-  rather than helping it; `bark`, `leaf`, `log_end` and `twig` are the
+  rather than helping it - fur among them; `bark`, `leaf`, `log_end` and `twig` are the
   four modules that still hand-roll a pixel loop, and nothing is waiting
   on them.
 - [`hex_blend`](src/hex_blend.rs) — bake-time de-repetition: rebuilds a

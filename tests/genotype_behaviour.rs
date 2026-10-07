@@ -130,7 +130,7 @@ fn genotype_behaviour_is_unchanged() {
 fn every_config_is_fingerprinted() {
     assert_eq!(
         all_cases().len(),
-        62,
-        "62 configs implement Genotype: 57 registry rows + 5 weathering structs"
+        66,
+        "66 configs implement Genotype: 61 registry rows + 5 weathering structs"
     );
 }

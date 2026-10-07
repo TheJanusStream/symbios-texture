@@ -55,6 +55,10 @@ Lichen d51f0fbc09eff5ad
 Reed 6afa1ae230ddabb3
 Needle 390a7735c8cdf772
 Broadleaf ed9e5bd15a2ea97d
+RoofTile 88ca5bba26376ac4
+LogWall 2aebab5dde258635
+DryStone 772060cf27cd3fa7
+Fur c29585237078446c
 WeatheringConfig 1659154329a76576
 EdgeWear c9d713d7df5cddd4
 Corrosion 204f9f536fa09bac

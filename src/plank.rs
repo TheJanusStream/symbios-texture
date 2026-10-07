@@ -1,13 +1,18 @@
 //! Plank / siding texture generator using domain-warped anisotropic noise.
 //!
 //! The algorithm:
-//! 1. Divide V into horizontal plank bands.
-//! 2. Per band, add a deterministic phase offset to U so grain de-correlates
+//! 1. Divide V into horizontal plank bands, so every board is long in U.
+//! 2. Per band, add a deterministic phase offset so grain de-correlates
 //!    between planks.
-//! 3. Sample anisotropic grain FBM (high U frequency, low V frequency) for the
-//!    wood-grain pattern; optionally warp it with a low-frequency FBM.
+//! 3. Sample anisotropic grain FBM - low frequency along U, the board's
+//!    length, and high across it in V - so the grain lines run along each
+//!    board; optionally warp them across the board with a low-frequency FBM
+//!    that tiles in U.
 //! 4. Overlay sparse Worley knots at the scaled knot density.
 //! 5. Apply a thin joint gap at plank boundaries.
+//!
+//! Until 0.8.0 step 3 ran the other way - high frequency along U - which
+//! drew the grain as streaks across every board (#23).
 
 use std::f64::consts::TAU;
 
@@ -15,6 +20,7 @@ use noise::core::worley::ReturnType;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin, Worley};
 use rayon::prelude::*;
 
+use crate::math::cell_hash;
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, normalize},
@@ -118,10 +124,25 @@ struct PlankRow {
     stagger_phase: f64,
     /// This row falls in the gap at the top or bottom of a plank.
     in_joint: bool,
-    /// Row torus coordinates for the low-frequency V half of the grain FBM.
-    g_nz: f64,
-    g_nw: f64,
+    /// Where this row lies on the grain FBM's V circle, in turns: the
+    /// plank's own phase, then [`GRAIN_TURNS_PER_BOARD`] across its height,
+    /// before the warp.
+    v_grain: f64,
 }
+
+/// How far across the grain FBM's V circle one board's height runs, in
+/// turns. With the circle's radius at the grain scale (12 by default) that
+/// is about fifteen units of noise from one edge of a board to the other:
+/// the grain lines a board shows across its width.
+const GRAIN_TURNS_PER_BOARD: f64 = 0.2;
+
+/// Along the board the grain changes this much more slowly than across it.
+const GRAIN_ALONG_RATIO: f64 = 0.08;
+
+/// The radius of the U circle the warp FBM is sampled on: a circumference of
+/// two units over the tile's width, the frequency the warp has always had,
+/// sampled on a circle so that it tiles in U.
+const WARP_RADIUS: f64 = 1.0 / std::f64::consts::PI;
 
 /// Per-generation sampler: the noise objects, the knot grid and the row table.
 struct PlankCell<'a> {
@@ -130,8 +151,12 @@ struct PlankCell<'a> {
     grain_noise: &'a ToroidalNoise<Fbm<Perlin>>,
     knot_grid: &'a [f64],
     rows: &'a [PlankRow],
-    /// Grain frequency along U — high, for long thin grain lines.
+    /// Grain frequency along U, the board's length - low, so a grain line
+    /// runs a long way along the board.
     g_freq_u: f64,
+    /// Grain frequency across the board, in V - high, so a board shows many
+    /// grain lines across its width.
+    g_freq_v: f64,
     width: usize,
 }
 
@@ -152,16 +177,25 @@ impl SurfaceCell for PlankCell<'_> {
             return SurfaceSample::matte(0.0, jc, JOINT_ROUGHNESS);
         }
 
-        // Domain warp: low-freq FBM nudges grain coordinate.
-        let warp_u = self.fbm_warp.get([u * 2.0, v * 2.0]) * c.grain_warp * 0.08;
+        // Domain warp: a low-frequency FBM, on a circle in U so that it
+        // tiles, bends the grain lines across the board.
+        let warp = self.fbm_warp.get([
+            (TAU * u).cos() * WARP_RADIUS,
+            (TAU * u).sin() * WARP_RADIUS,
+            v * 2.0,
+        ]) * c.grain_warp
+            * 0.08;
 
-        // Anisotropic grain: per-plank phase shift on U.
-        let u_grain = (u + row.phase * 0.7 + warp_u).rem_euclid(1.0);
-        let g_nx = (TAU * u_grain).cos() * self.g_freq_u;
-        let g_ny = (TAU * u_grain).sin() * self.g_freq_u;
-        let grain_raw = self
-            .grain_noise
-            .get_precomputed(g_nx, g_ny, row.g_nz, row.g_nw);
+        // Anisotropic grain: slow along the board (U, shifted per plank so
+        // neighbours do not line up), fast across it (V).
+        let u_grain = (u + row.phase * 0.7).rem_euclid(1.0);
+        let v_grain = row.v_grain + warp;
+        let grain_raw = self.grain_noise.get_precomputed(
+            (TAU * u_grain).cos() * self.g_freq_u,
+            (TAU * u_grain).sin() * self.g_freq_u,
+            (TAU * v_grain).cos() * self.g_freq_v,
+            (TAU * v_grain).sin() * self.g_freq_v,
+        );
         let grain_t = normalize(grain_raw); // [0, 1]
 
         // Knot: Worley cell distance → circular depression.
@@ -223,7 +257,7 @@ impl PlankGenerator {
     }
 
     /// The per-row table — see [`PlankRow`].
-    fn rows(&self, h: usize, plank_count: f64, g_freq_v: f64) -> Vec<PlankRow> {
+    fn rows(&self, h: usize, plank_count: f64) -> Vec<PlankRow> {
         let c = &self.config;
         let joint_half = c.joint_width * 0.5;
         (0..h)
@@ -232,14 +266,13 @@ impl PlankGenerator {
                 let y_cell = v_scaled.floor() as i64;
                 let v_frac = v_scaled.fract();
                 let phase = cell_hash(y_cell, 0, c.seed);
-                // Grain drifts gently across the board, and per plank.
-                let v_grain = v_frac * 0.1 + phase * 0.3;
                 PlankRow {
                     phase,
                     stagger_phase: cell_hash(y_cell, 1, c.seed) * c.stagger,
                     in_joint: v_frac < joint_half || v_frac > 1.0 - joint_half,
-                    g_nz: (TAU * v_grain).cos() * g_freq_v,
-                    g_nw: (TAU * v_grain).sin() * g_freq_v,
+                    // Each plank starts its grain at its own place on the
+                    // circle, and crosses it board edge to board edge.
+                    v_grain: phase + v_frac * GRAIN_TURNS_PER_BOARD,
                 }
             })
             .collect()
@@ -259,14 +292,15 @@ impl PlankGenerator {
         let (w, h) = (width as usize, height as usize);
 
         let knot_grid = self.knot_grid(w, h, plank_count);
-        let rows = self.rows(h, plank_count, c.grain_scale * 0.08);
+        let rows = self.rows(h, plank_count);
         let cell = PlankCell {
             config: c,
             fbm_warp: &self.fbm_warp,
             grain_noise: &self.grain_noise,
             knot_grid: &knot_grid,
             rows: &rows,
-            g_freq_u: c.grain_scale,
+            g_freq_u: c.grain_scale * GRAIN_ALONG_RATIO,
+            g_freq_v: c.grain_scale,
             width: w,
         };
         generate_surface_weathered(
@@ -305,16 +339,6 @@ const JOINT_ROUGHNESS: f32 = 0.92;
 
 // --- helpers ----------------------------------------------------------------
 
-fn cell_hash(cell: i64, salt: u64, seed: u32) -> f64 {
-    let mut h = seed as u64;
-    h ^= (cell as u64).wrapping_mul(6_364_136_223_846_793_005);
-    h ^= salt.wrapping_mul(1_442_695_040_888_963_407);
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    h ^= h >> 33;
-    (h as f64) * (1.0 / u64::MAX as f64)
-}
-
 #[inline]
 fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     [
@@ -322,4 +346,98 @@ fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
         lerp(a[1], b[1], t),
         lerp(a[2], b[2], t),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The luminance of each texel of a bake, row-major.
+    fn luminance(map: &TextureMap) -> Vec<f64> {
+        let texels = (map.width * map.height) as usize;
+        map.albedo[..texels * 4]
+            .chunks_exact(4)
+            .map(|px| 0.2126 * px[0] as f64 + 0.7152 * px[1] as f64 + 0.0722 * px[2] as f64)
+            .collect()
+    }
+
+    /// A plank with nothing on it but grain and its joints between boards:
+    /// no knots, no end joints.
+    fn bare_grain() -> PlankConfig {
+        PlankConfig {
+            knot_density: 0.0,
+            stagger: 0.0,
+            ..PlankConfig::default()
+        }
+    }
+
+    /// Whether row `y` of a `size`-texel bake is clear of a joint between
+    /// boards, with a texel to spare either side.
+    fn inside_a_board(c: &PlankConfig, y: usize, size: usize) -> bool {
+        let plank_count = c.plank_count.round();
+        let margin = c.joint_width * 0.5 + 1.0 / size as f64 * plank_count;
+        let v_frac = (y as f64 / size as f64 * plank_count).fract();
+        v_frac > margin && v_frac < 1.0 - margin
+    }
+
+    /// #23: the grain runs along each board - long in U, where the boards
+    /// run - so the albedo changes far less from one texel to the next along
+    /// a board than across it. Until 0.8.0 it was the other way round: the
+    /// grain was drawn as streaks across every board.
+    #[test]
+    fn the_grain_runs_along_the_boards() {
+        let size = 256;
+        let c = bare_grain();
+        let map = PlankGenerator::new(c.clone())
+            .generate(size as u32, size as u32)
+            .expect("a bake");
+        let l = luminance(&map);
+        let (mut along, mut across, mut pairs) = (0.0, 0.0, 0usize);
+        for y in 0..size - 1 {
+            if !inside_a_board(&c, y, size) || !inside_a_board(&c, y + 1, size) {
+                continue;
+            }
+            for x in 0..size - 1 {
+                along += (l[y * size + x + 1] - l[y * size + x]).abs();
+                across += (l[(y + 1) * size + x] - l[y * size + x]).abs();
+                pairs += 1;
+            }
+        }
+        assert!(
+            pairs > size * size / 2,
+            "the boards were read: {pairs} pairs"
+        );
+        let (along, across) = (along / pairs as f64, across / pairs as f64);
+        assert!(
+            along * 3.0 < across,
+            "the grain changes {along:.3} a texel along the boards and {across:.3} across them"
+        );
+    }
+
+    /// The grain still tiles in U: the step from the tile's last column back
+    /// to its first is no bigger than a step between neighbours inside it -
+    /// the warp is sampled on a circle in U, as the grain is.
+    #[test]
+    fn the_grain_tiles_in_u() {
+        let size = 256;
+        let c = bare_grain();
+        let map = PlankGenerator::new(c.clone())
+            .generate(size as u32, size as u32)
+            .expect("a bake");
+        let l = luminance(&map);
+        let (mut seam, mut inside, mut rows) = (0.0, 0.0, 0usize);
+        for y in (0..size).filter(|&y| inside_a_board(&c, y, size)) {
+            seam += (l[y * size] - l[y * size + size - 1]).abs();
+            inside += (0..size - 1)
+                .map(|x| (l[y * size + x + 1] - l[y * size + x]).abs())
+                .sum::<f64>()
+                / (size - 1) as f64;
+            rows += 1;
+        }
+        let (seam, inside) = (seam / rows as f64, inside / rows as f64);
+        assert!(
+            seam < inside * 2.0 + 0.5,
+            "the seam steps {seam:.3}, a step inside the tile {inside:.3}"
+        );
+    }
 }

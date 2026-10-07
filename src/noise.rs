@@ -770,21 +770,7 @@ pub fn stripe(u: f64, v: f64, params: StripeParams, warp_turns: f64) -> f64 {
     let phase = params.cycles_u as f64 * u + params.cycles_v as f64 * v + warp_turns;
     params.profile.shape(phase, params.sharpness)
 }
-/// Deterministic integer hash → \[0, 1\].  Drives Voronoi site jitter and
-/// per-cell variance for the cell-decomposition generators.
-///
-/// Pair it with [`CellularSample`]'s `cell_x`/`cell_y` to give every cell its
-/// own stable colour, height, or orientation.  Vary `seed` to decorrelate
-/// several such attributes on the same lattice.
-pub fn cell_hash(bx: i64, by: i64, seed: u32) -> f64 {
-    let mut h = seed as u64;
-    h ^= (bx as u64).wrapping_mul(6_364_136_223_846_793_005);
-    h ^= (by as u64).wrapping_mul(1_442_695_040_888_963_407);
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    h ^= h >> 33;
-    (h as f64) * (1.0 / u64::MAX as f64)
-}
+pub use crate::math::cell_hash;
 
 #[cfg(test)]
 mod tests {

@@ -9,6 +9,7 @@
 
 use noise::{Fbm, MultiFractal, Perlin};
 
+use crate::math::cell_hash;
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     noise::{ToroidalNoise, normalize, sample_grid_into},
@@ -274,18 +275,6 @@ impl TextureGenerator for BrickGenerator {
 }
 
 // --- helpers ----------------------------------------------------------------
-
-/// Deterministic integer hash → \[0, 1\].  Produces per-brick colour jitter
-/// with good distribution and no visible lattice patterns.
-fn cell_hash(bx: i64, by: i64, seed: u32) -> f64 {
-    let mut h = seed as u64;
-    h ^= (bx as u64).wrapping_mul(6_364_136_223_846_793_005);
-    h ^= (by as u64).wrapping_mul(1_442_695_040_888_963_407);
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    h ^= h >> 33;
-    (h as f64) * (1.0 / u64::MAX as f64)
-}
 
 #[cfg(test)]
 mod tests {

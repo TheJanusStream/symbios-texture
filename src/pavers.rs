@@ -9,6 +9,7 @@
 
 use noise::{Fbm, MultiFractal, Perlin};
 
+use crate::math::cell_hash;
 use crate::{
     generator::{TextureError, TextureGenerator, TextureMap, Workspace, validate_dimensions},
     hex_lattice::{HexLattice, SQRT3, cube_round},
@@ -330,17 +331,6 @@ fn hex_sdf(mut px: f64, mut py: f64, r: f64) -> f64 {
 }
 
 // --- Helpers ----------------------------------------------------------------
-
-/// Deterministic integer cell hash → \[0, 1\].
-fn cell_hash(bu: i64, bv: i64, seed: u32) -> f64 {
-    let mut h = seed as u64;
-    h ^= (bu as u64).wrapping_mul(6_364_136_223_846_793_005);
-    h ^= (bv as u64).wrapping_mul(1_442_695_040_888_963_407);
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    h ^= h >> 33;
-    (h as f64) * (1.0 / u64::MAX as f64)
-}
 
 #[cfg(test)]
 mod tests {
