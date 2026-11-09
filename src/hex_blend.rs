@@ -232,7 +232,7 @@ struct ChannelLut {
 impl ChannelLut {
     fn build(plane: &[u8], channel: usize) -> Self {
         let mut hist = [0u64; 256];
-        for px in plane.chunks_exact(4) {
+        for px in plane.as_chunks::<4>().0.iter() {
             hist[usize::from(px[channel])] += 1;
         }
         let n = (plane.len() / 4) as f64;
@@ -335,7 +335,9 @@ fn blend_plane(
 ) -> Vec<u8> {
     let luts: [ChannelLut; 4] = std::array::from_fn(|c| ChannelLut::build(example, c));
     let gauss: Vec<f32> = example
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|px| {
             [
                 luts[0].forward(px[0]),
@@ -350,7 +352,7 @@ fn blend_plane(
     let mut out = vec![0u8; w * h * 4];
     out.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
         let v = y as f64 / h as f64;
-        for (x, px) in row.chunks_exact_mut(4).enumerate() {
+        for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let u = x as f64 / w as f64;
             let f = frame_at(lat, cfg.seed, cfg.blend_exponent, ratio, u, v);
             let mut acc = [0.5f32; 4];
@@ -372,7 +374,7 @@ fn blend_plane(
 /// Blending unit normals does not give unit normals; put them back on the
 /// sphere.  Alpha is left alone.
 fn renormalise(normal: &mut [u8]) {
-    for px in normal.chunks_exact_mut(4) {
+    for px in normal.as_chunks_mut::<4>().0.iter_mut() {
         let n = [px[0], px[1], px[2]].map(|b| f32::from(b) / 255.0 * 2.0 - 1.0);
         let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
         if len > 1e-6 {
@@ -406,7 +408,9 @@ mod tests {
 
     fn luminance(map: &TextureMap) -> Vec<f64> {
         map.albedo
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| 0.299 * f64::from(p[0]) + 0.587 * f64::from(p[1]) + 0.114 * f64::from(p[2]))
             .collect()
     }
@@ -555,8 +559,8 @@ mod tests {
         for (name, example, bound) in [("rock", rock, 0.02), ("patchy", patchy(96), 0.12)] {
             let out = hex_blend(&example, &HexBlendConfig::default(), 96, 96).expect("blend");
             for c in 0..3 {
-                let a = cdf(example.albedo.chunks_exact(4).map(|p| p[c]));
-                let b = cdf(out.albedo.chunks_exact(4).map(|p| p[c]));
+                let a = cdf(example.albedo.as_chunks::<4>().0.iter().map(|p| p[c]));
+                let b = cdf(out.albedo.as_chunks::<4>().0.iter().map(|p| p[c]));
                 let worst = a
                     .iter()
                     .zip(&b)
@@ -599,16 +603,23 @@ mod tests {
     fn a_constant_channel_passes_through() {
         let example = patchy(64);
         let out = hex_blend(&example, &HexBlendConfig::default(), 64, 64).expect("blend");
-        assert!(out.albedo.chunks_exact(4).all(|p| p[3] == 255));
-        assert!(example.roughness.chunks_exact(4).all(|p| p[2] == 0));
-        assert!(out.roughness.chunks_exact(4).all(|p| p[2] == 0));
+        assert!(out.albedo.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
+        assert!(
+            example
+                .roughness
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| p[2] == 0)
+        );
+        assert!(out.roughness.as_chunks::<4>().0.iter().all(|p| p[2] == 0));
     }
 
     #[test]
     fn normals_stay_unit_length() {
         let example = patchy(64);
         let out = hex_blend(&example, &HexBlendConfig::default(), 64, 64).expect("blend");
-        for p in out.normal.chunks_exact(4) {
+        for p in out.normal.as_chunks::<4>().0.iter() {
             let n = [p[0], p[1], p[2]].map(|b| f64::from(b) / 255.0 * 2.0 - 1.0);
             let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
             assert!((len - 1.0).abs() < 2.5 / 255.0, "|n| = {len}");

@@ -6,7 +6,9 @@ use crate::generator::TextureMap;
 pub(crate) fn luminance(map: &TextureMap) -> Vec<f64> {
     let texels = (map.width * map.height) as usize;
     map.albedo[..texels * 4]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|px| 0.2126 * px[0] as f64 + 0.7152 * px[1] as f64 + 0.0722 * px[2] as f64)
         .collect()
 }
